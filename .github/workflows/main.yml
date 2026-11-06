@@ -14,6 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,25 +29,50 @@ jobs:
         with:
           node-version: 22
 
-      - name: Extract original project ZIP
+      - name: Extract project ZIP
         run: |
           test -f 'KGP_QII_NEW_EAS_PROJECT.zip'
           mkdir -p source
           unzip -q 'KGP_QII_NEW_EAS_PROJECT.zip' -d source
+
           test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
           test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
 
       - name: Install workspace dependencies
         working-directory: source/Khmer-Game-Portal
-        run: pnpm install --no-frozen-lockfile
+        run: |
+          pnpm install --no-frozen-lockfile
 
-      - name: Configure new EAS project under personal account
+      - name: Configure new EAS project
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
+          set -e
+
           test -n "$EXPO_TOKEN"
-          pnpm dlx eas-cli@latest init --account qiqii168 --non-interactive
+
+          python - <<'PY'
+          import json
+
+          path = "app.json"
+
+          with open(path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          expo = data.setdefault("expo", {})
+          expo["owner"] = "qiiqii168"
+
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(data, f, indent=2, ensure_ascii=False)
+              f.write("\n")
+
+          print("Expo owner configured: qiiqii168")
+          PY
+
+          pnpm dlx eas-cli@latest init \
+            --account qiiqii168 \
+            --non-interactive
 
       - name: Build iOS IPA with EAS
         id: eas-build
@@ -55,35 +81,69 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         shell: bash
         run: |
+          set -e
           set -o pipefail
-          pnpm dlx eas-cli@latest build --platform ios --profile production --wait --non-interactive --json > "$RUNNER_TEMP/eas-build.json"
+
+          pnpm dlx eas-cli@latest build \
+            --platform ios \
+            --profile production \
+            --wait \
+            --non-interactive \
+            --json > "$RUNNER_TEMP/eas-build.json"
+
           BUILD_ID=$(python - <<'PY'
-          import json, os
-          p=os.path.join(os.environ['RUNNER_TEMP'], 'eas-build.json')
-          data=json.load(open(p))
+          import json
+          import os
+
+          path = os.path.join(
+              os.environ["RUNNER_TEMP"],
+              "eas-build.json"
+          )
+
+          with open(path, "r") as f:
+              data = json.load(f)
+
           if isinstance(data, list):
-              data=data[-1]
-          if isinstance(data, dict) and 'build' in data and isinstance(data['build'], dict):
-              data=data['build']
-          build_id=data.get('id') if isinstance(data, dict) else None
+              data = data[-1]
+
+          if isinstance(data, dict) and isinstance(data.get("build"), dict):
+              data = data["build"]
+
+          build_id = data.get("id") if isinstance(data, dict) else None
+
           if not build_id:
-              raise SystemExit('Could not read EAS build ID from JSON output')
+              raise SystemExit("Could not read EAS build ID")
+
           print(build_id)
           PY
           )
+
           echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
-          pnpm dlx eas-cli@latest build:download --build-id "$BUILD_ID" --non-interactive
+
+          pnpm dlx eas-cli@latest build:download \
+            --build-id "$BUILD_ID" \
+            --non-interactive
 
       - name: Find IPA
         id: ipa
         run: |
-          IPA_PATH=$(find source/Khmer-Game-Portal/artifacts/khmer-game-port -type f -name '*.ipa' -print -quit)
+          set -e
+
+          IPA_PATH=$(find source/Khmer-Game-Portal/artifacts/khmer-game-port \
+            -type f -name '*.ipa' -print -quit)
+
           if [ -z "$IPA_PATH" ]; then
             IPA_PATH=$(find . -type f -name '*.ipa' -print -quit)
           fi
-          test -n "$IPA_PATH"
+
+          if [ -z "$IPA_PATH" ]; then
+            echo "IPA file not found"
+            exit 1
+          fi
+
           mkdir -p output
           cp "$IPA_PATH" output/KGP-QII.ipa
+
           echo "path=output/KGP-QII.ipa" >> "$GITHUB_OUTPUT"
 
       - name: Upload IPA artifact
