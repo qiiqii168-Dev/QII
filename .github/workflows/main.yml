@@ -18,9 +18,7 @@ jobs:
       - name: Extract KGP Project
         run: |
           unzip -q "KGP V2.zip" -d kgp-source
-
           test -f kgp-source/Khmer-Game-Portal/package.json
-          test -f kgp-source/Khmer-Game-Portal/pnpm-lock.yaml
           test -f kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port/eas.json
 
       - name: Setup pnpm
@@ -37,6 +35,12 @@ jobs:
         working-directory: kgp-source/Khmer-Game-Portal
         run: pnpm install --no-frozen-lockfile
 
+      - name: Initialize EAS Project
+        working-directory: kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: pnpm dlx eas-cli@latest init --account qiqii168 --non-interactive
+
       - name: Build iOS IPA
         working-directory: kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port
         env:
@@ -51,45 +55,30 @@ jobs:
 
           node - <<'NODE'
           const fs = require('fs');
-
           const data = JSON.parse(fs.readFileSync('eas-build.json', 'utf8'));
 
-          function findBuildUrl(obj) {
+          function findUrl(obj) {
             if (!obj || typeof obj !== 'object') return null;
-
-            if (typeof obj.buildUrl === 'string') {
-              return obj.buildUrl;
-            }
-
+            if (typeof obj.buildUrl === 'string') return obj.buildUrl;
             for (const value of Object.values(obj)) {
-              const result = findBuildUrl(value);
+              const result = findUrl(value);
               if (result) return result;
             }
-
             return null;
           }
 
-          const url = findBuildUrl(data);
-
-          if (!url) {
-            throw new Error('IPA download URL was not found in EAS build result.');
-          }
-
           (async () => {
-            const response = await fetch(url);
+            const url = findUrl(data);
+            if (!url) throw new Error('IPA URL not found');
 
-            if (!response.ok) {
-              throw new Error(`IPA download failed: ${response.status}`);
-            }
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('IPA download failed');
 
             const buffer = Buffer.from(await response.arrayBuffer());
-
-            if (buffer.length < 1000) {
-              throw new Error('Downloaded IPA file is unexpectedly small.');
-            }
+            if (buffer.length < 1000) throw new Error('Invalid IPA file');
 
             fs.writeFileSync('KGP-QII.ipa', buffer);
-            console.log('IPA downloaded:', buffer.length, 'bytes');
+            console.log('IPA downloaded successfully');
           })().catch(error => {
             console.error(error);
             process.exit(1);
