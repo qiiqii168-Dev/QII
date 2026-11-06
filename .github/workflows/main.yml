@@ -12,12 +12,14 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Extract project
+      - name: Extract KGP Project
         run: |
           unzip -q "KGP V2.zip" -d kgp-source
+
+          test -f kgp-source/Khmer-Game-Portal/package.json
           test -f kgp-source/Khmer-Game-Portal/pnpm-lock.yaml
           test -f kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port/eas.json
 
@@ -26,30 +28,78 @@ jobs:
         with:
           version: 10
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Install dependencies
+      - name: Install Dependencies
         working-directory: kgp-source/Khmer-Game-Portal
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
-      - name: Build iOS
+      - name: Build iOS IPA
         working-directory: kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port
-        run: pnpm dlx eas-cli@latest build --platform ios --profile preview --non-interactive --wait
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          pnpm dlx eas-cli@latest build \
+            --platform ios \
+            --profile preview \
+            --non-interactive \
+            --wait \
+            --json > eas-build.json
 
-      - name: Download IPA
-        working-directory: kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port
-        run: pnpm dlx eas-cli@latest build:download --latest --platform ios --path ./KGP-QII.ipa
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          node - <<'NODE'
+          const fs = require('fs');
 
-      - name: Upload IPA
+          const data = JSON.parse(fs.readFileSync('eas-build.json', 'utf8'));
+
+          function findBuildUrl(obj) {
+            if (!obj || typeof obj !== 'object') return null;
+
+            if (typeof obj.buildUrl === 'string') {
+              return obj.buildUrl;
+            }
+
+            for (const value of Object.values(obj)) {
+              const result = findBuildUrl(value);
+              if (result) return result;
+            }
+
+            return null;
+          }
+
+          const url = findBuildUrl(data);
+
+          if (!url) {
+            throw new Error('IPA download URL was not found in EAS build result.');
+          }
+
+          (async () => {
+            const response = await fetch(url);
+
+            if (!response.ok) {
+              throw new Error(`IPA download failed: ${response.status}`);
+            }
+
+            const buffer = Buffer.from(await response.arrayBuffer());
+
+            if (buffer.length < 1000) {
+              throw new Error('Downloaded IPA file is unexpectedly small.');
+            }
+
+            fs.writeFileSync('KGP-QII.ipa', buffer);
+            console.log('IPA downloaded:', buffer.length, 'bytes');
+          })().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: KGP-QII-IPA
           path: kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port/KGP-QII.ipa
           if-no-files-found: error
+          retention-days: 7
