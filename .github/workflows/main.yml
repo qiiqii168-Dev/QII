@@ -1,7 +1,11 @@
-name: Build KGP QII IPA
+name: Build KGP QII iOS IPA
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'KGP_QII_NEW_EAS_PROJECT.zip'
+      - '.github/workflows/main.yml'
 
 permissions:
   contents: read
@@ -9,19 +13,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-
+    timeout-minutes: 60
     steps:
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Extract KGP Project
-        run: |
-          unzip -q "KGP V2.zip" -d kgp-source
-
-          test -f kgp-source/Khmer-Game-Portal/package.json
-          test -f kgp-source/Khmer-Game-Portal/pnpm-lock.yaml
-          test -f kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port/eas.json
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -33,97 +28,68 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Dependencies
-        working-directory: kgp-source/Khmer-Game-Portal
+      - name: Extract original project ZIP
+        run: |
+          test -f 'KGP_QII_NEW_EAS_PROJECT.zip'
+          mkdir -p source
+          unzip -q 'KGP_QII_NEW_EAS_PROJECT.zip' -d source
+          test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
+          test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
+
+      - name: Install workspace dependencies
+        working-directory: source/Khmer-Game-Portal
         run: pnpm install --no-frozen-lockfile
 
-      - name: Initialize EAS Project
-        working-directory: kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port
+      - name: Configure new EAS project under personal account
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          pnpm dlx eas-cli@latest init \
-            --account qiqii168s-team \
-            --force \
-            --non-interactive
+          test -n "$EXPO_TOKEN"
+          pnpm dlx eas-cli@latest init --account qiqii168 --non-interactive
 
-      - name: Build iOS IPA
-        working-directory: kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port
+      - name: Build iOS IPA with EAS
+        id: eas-build
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        shell: bash
         run: |
-          pnpm dlx eas-cli@latest build \
-            --platform ios \
-            --profile preview \
-            --non-interactive \
-            --wait \
-            --json > eas-build.json
+          set -o pipefail
+          pnpm dlx eas-cli@latest build --platform ios --profile production --wait --non-interactive --json > "$RUNNER_TEMP/eas-build.json"
+          BUILD_ID=$(python - <<'PY'
+          import json, os
+          p=os.path.join(os.environ['RUNNER_TEMP'], 'eas-build.json')
+          data=json.load(open(p))
+          if isinstance(data, list):
+              data=data[-1]
+          if isinstance(data, dict) and 'build' in data and isinstance(data['build'], dict):
+              data=data['build']
+          build_id=data.get('id') if isinstance(data, dict) else None
+          if not build_id:
+              raise SystemExit('Could not read EAS build ID from JSON output')
+          print(build_id)
+          PY
+          )
+          echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+          pnpm dlx eas-cli@latest build:download --build-id "$BUILD_ID" --non-interactive
 
-      - name: Download IPA
-        working-directory: kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port
+      - name: Find IPA
+        id: ipa
         run: |
-          node <<'NODE'
-          const fs = require('fs');
+          IPA_PATH=$(find source/Khmer-Game-Portal/artifacts/khmer-game-port -type f -name '*.ipa' -print -quit)
+          if [ -z "$IPA_PATH" ]; then
+            IPA_PATH=$(find . -type f -name '*.ipa' -print -quit)
+          fi
+          test -n "$IPA_PATH"
+          mkdir -p output
+          cp "$IPA_PATH" output/KGP-QII.ipa
+          echo "path=output/KGP-QII.ipa" >> "$GITHUB_OUTPUT"
 
-          const data = JSON.parse(
-            fs.readFileSync('eas-build.json', 'utf8')
-          );
-
-          function findUrl(obj) {
-            if (!obj || typeof obj !== 'object') return null;
-
-            if (typeof obj.buildUrl === 'string') {
-              return obj.buildUrl;
-            }
-
-            for (const value of Object.values(obj)) {
-              const result = findUrl(value);
-              if (result) return result;
-            }
-
-            return null;
-          }
-
-          async function main() {
-            const url = findUrl(data);
-
-            if (!url) {
-              throw new Error('IPA download URL not found');
-            }
-
-            const response = await fetch(url);
-
-            if (!response.ok) {
-              throw new Error(`Download failed: ${response.status}`);
-            }
-
-            const buffer = Buffer.from(
-              await response.arrayBuffer()
-            );
-
-            if (buffer.length < 1000) {
-              throw new Error('Invalid IPA file');
-            }
-
-            fs.writeFileSync('KGP-QII.ipa', buffer);
-
-            console.log(
-              'IPA downloaded:',
-              buffer.length,
-              'bytes'
-            );
-          }
-
-          main().catch(error => {
-            console.error(error);
-            process.exit(1);
-          });
-          NODE
-
-      - name: Upload IPA Artifact
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KGP-QII-IPA
-          path: kgp-source/Khmer-Game-Portal/artifacts/khmer-game-port/KGP-QII.ipa
+          name: KGP-QII-iOS-IPA
+          path: output/KGP-QII.ipa
           if-no-files-found: error
           retention-days: 7
