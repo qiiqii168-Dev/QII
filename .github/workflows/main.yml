@@ -44,14 +44,14 @@ jobs:
           test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
           test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
 
-          echo "Project ZIP extracted successfully."
+          echo "Project extracted successfully."
 
       - name: Install workspace dependencies
         working-directory: source/Khmer-Game-Portal
         run: |
           pnpm install --no-frozen-lockfile
 
-      - name: Configure EAS project and Ad-hoc profile
+      - name: Configure Expo project
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -65,27 +65,19 @@ jobs:
           import json
           import os
 
-          # Configure Expo app
           app_path = "app.json"
 
           with open(app_path, "r", encoding="utf-8") as f:
               app = json.load(f)
 
           expo = app.setdefault("expo", {})
-          expo["owner"] = "qiqii168"
+          expo["owner"] = "qiiqii168"
           expo["slug"] = "kgp-qii"
-
-          # Remove any old EAS project link.
-          # EAS will link/create @qiqii168/kgp-qii.
-          extra = expo.setdefault("extra", {})
-          eas = extra.setdefault("eas", {})
-          eas.pop("projectId", None)
 
           with open(app_path, "w", encoding="utf-8") as f:
               json.dump(app, f, indent=2, ensure_ascii=False)
               f.write("\n")
 
-          # Configure internal Ad-hoc IPA build
           eas_path = "eas.json"
 
           if os.path.exists(eas_path):
@@ -107,16 +99,16 @@ jobs:
               json.dump(config, f, indent=2, ensure_ascii=False)
               f.write("\n")
 
-          print("Expo app configured.")
-          print("Ad-hoc internal IPA profile configured.")
+          print("Expo owner: qiiqii168")
+          print("Project slug: kgp-qii")
+          print("Distribution: internal")
           PY
 
           pnpm dlx eas-cli@latest init \
-            --account qiqii168 \
+            --account qiiqii168 \
             --non-interactive
 
       - name: Build iOS Ad-hoc IPA
-        id: eas_build
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -173,15 +165,11 @@ jobs:
           url = find_url(data)
 
           if not url:
-              raise SystemExit(
-                  "Build completed, but IPA download URL was not found."
-              )
+              raise SystemExit("IPA download URL not found.")
 
           print(url)
           PY
           )
-
-          echo "IPA download URL found."
 
           mkdir -p output
 
