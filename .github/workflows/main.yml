@@ -1,116 +1,201 @@
 name: Build KGP QII iOS IPA
 
-on:
-workflow_dispatch:
-push:
-paths:
-- ‘KGP_QII_NEW_EAS_PROJECT_ADHOC.zip’
-- ‘.github/workflows/main.yml’
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "KGP V2.zip"
+      - ".github/workflows/main.yml"
 
 permissions:
-contents: read
+  contents: read
 
 jobs:
-build:
-runs-on: ubuntu-latest
-timeout-minutes: 60
+  build:
+    name: Build KGP QII IPA
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
 
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
-  - name: Setup pnpm
-    uses: pnpm/action-setup@v4
-    with:
-      version: 10
-  - name: Setup Node.js
-    uses: actions/setup-node@v4
-    with:
-      node-version: 22
-  - name: Extract project ZIP
-    run: |
-      set -e
-      test -f 'KGP_QII_NEW_EAS_PROJECT_ADHOC.zip'
-      mkdir -p source
-      unzip -q 'KGP_QII_NEW_EAS_PROJECT_ADHOC.zip' -d source
-      test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
-      test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
-      test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/eas.json
-  - name: Install workspace dependencies
-    working-directory: source/Khmer-Game-Portal
-    run: pnpm install --no-frozen-lockfile
-  - name: Configure new EAS project
-    working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-    env:
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-    run: |
-      set -e
-      test -n "$EXPO_TOKEN"
-      python - <<'PY'
-      import json
-      path = "app.json"
-      with open(path, "r", encoding="utf-8") as f:
-          data = json.load(f)
-      expo = data.setdefault("expo", {})
-      expo["owner"] = "qiiqii168"
-      ios = expo.setdefault("ios", {})
-      info = ios.setdefault("infoPlist", {})
-      info["ITSAppUsesNonExemptEncryption"] = False
-      with open(path, "w", encoding="utf-8") as f:
-          json.dump(data, f, indent=2, ensure_ascii=False)
-          f.write("\n")
-      PY
-      pnpm dlx eas-cli@latest init \
-        --account qiiqii168 \
-        --non-interactive
-  - name: Build iOS IPA with EAS
-    id: eas-build
-    working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-    env:
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-    shell: bash
-    run: |
-      set -euo pipefail
-      pnpm dlx eas-cli@latest build \
-        --platform ios \
-        --profile production \
-        --wait \
-        --non-interactive \
-        --json > "$RUNNER_TEMP/eas-build.json"
-      BUILD_ID=$(python - <<'PY'
-      import json
-      import os
-      path = os.path.join(os.environ["RUNNER_TEMP"], "eas-build.json")
-      with open(path, "r") as f:
-          data = json.load(f)
-      if isinstance(data, list):
-          data = data[-1]
-      if isinstance(data, dict) and isinstance(data.get("build"), dict):
-          data = data["build"]
-      build_id = data.get("id") if isinstance(data, dict) else None
-      if not build_id:
-          raise SystemExit("Could not read EAS build ID")
-      print(build_id)
-      PY
-      )
-      echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
-      pnpm dlx eas-cli@latest build:download \
-        --build-id "$BUILD_ID" \
-        --non-interactive
-  - name: Find IPA
-    run: |
-      set -e
-      IPA_PATH=$(find source/Khmer-Game-Portal/artifacts/khmer-game-port \
-        -type f -name '*.ipa' -print -quit)
-      if [ -z "$IPA_PATH" ]; then
-        IPA_PATH=$(find . -type f -name '*.ipa' -print -quit)
-      fi
-      test -n "$IPA_PATH"
-      mkdir -p output
-      cp "$IPA_PATH" output/KGP-QII.ipa
-  - name: Upload IPA artifact
-    uses: actions/upload-artifact@v4
-    with:
-      name: KGP-QII-iOS-IPA
-      path: output/KGP-QII.ipa
-      if-no-files-found: error
-      retention-days: 7
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Extract original project ZIP
+        shell: bash
+        run: |
+          set -e
+
+          test -f "KGP V2.zip"
+
+          mkdir -p source
+
+          unzip -q "KGP V2.zip" -d source
+
+          test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
+          test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
+
+          echo "Project ZIP extracted successfully."
+
+      - name: Install workspace dependencies
+        working-directory: source/Khmer-Game-Portal
+        run: |
+          pnpm install --no-frozen-lockfile
+
+      - name: Configure EAS project and Ad-hoc profile
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        shell: bash
+        run: |
+          set -e
+
+          test -n "$EXPO_TOKEN"
+
+          python - <<'PY'
+          import json
+          import os
+
+          # Configure Expo app
+          app_path = "app.json"
+
+          with open(app_path, "r", encoding="utf-8") as f:
+              app = json.load(f)
+
+          expo = app.setdefault("expo", {})
+          expo["owner"] = "qiqii168"
+          expo["slug"] = "kgp-qii"
+
+          # Remove any old EAS project link.
+          # EAS will link/create @qiqii168/kgp-qii.
+          extra = expo.setdefault("extra", {})
+          eas = extra.setdefault("eas", {})
+          eas.pop("projectId", None)
+
+          with open(app_path, "w", encoding="utf-8") as f:
+              json.dump(app, f, indent=2, ensure_ascii=False)
+              f.write("\n")
+
+          # Configure internal Ad-hoc IPA build
+          eas_path = "eas.json"
+
+          if os.path.exists(eas_path):
+              with open(eas_path, "r", encoding="utf-8") as f:
+                  config = json.load(f)
+          else:
+              config = {}
+
+          profiles = config.setdefault("build", {})
+
+          profiles["preview"] = {
+              "distribution": "internal",
+              "ios": {
+                  "simulator": False
+              }
+          }
+
+          with open(eas_path, "w", encoding="utf-8") as f:
+              json.dump(config, f, indent=2, ensure_ascii=False)
+              f.write("\n")
+
+          print("Expo app configured.")
+          print("Ad-hoc internal IPA profile configured.")
+          PY
+
+          pnpm dlx eas-cli@latest init \
+            --account qiqii168 \
+            --non-interactive
+
+      - name: Build iOS Ad-hoc IPA
+        id: eas_build
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        shell: bash
+        run: |
+          set -e
+          set -o pipefail
+
+          pnpm dlx eas-cli@latest build \
+            --platform ios \
+            --profile preview \
+            --wait \
+            --non-interactive \
+            --json > "$RUNNER_TEMP/eas-build.json"
+
+          BUILD_URL=$(python - <<'PY'
+          import json
+          import os
+
+          path = os.path.join(
+              os.environ["RUNNER_TEMP"],
+              "eas-build.json"
+          )
+
+          with open(path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          def find_url(obj):
+              if isinstance(obj, dict):
+                  artifacts = obj.get("artifacts")
+
+                  if isinstance(artifacts, dict):
+                      for key in (
+                          "buildUrl",
+                          "applicationArchiveUrl"
+                      ):
+                          value = artifacts.get(key)
+                          if value:
+                              return value
+
+                  for value in obj.values():
+                      result = find_url(value)
+                      if result:
+                          return result
+
+              elif isinstance(obj, list):
+                  for item in obj:
+                      result = find_url(item)
+                      if result:
+                          return result
+
+              return None
+
+          url = find_url(data)
+
+          if not url:
+              raise SystemExit(
+                  "Build completed, but IPA download URL was not found."
+              )
+
+          print(url)
+          PY
+          )
+
+          echo "IPA download URL found."
+
+          mkdir -p output
+
+          curl -fL "$BUILD_URL" \
+            -o output/KGP-QII.ipa
+
+          test -s output/KGP-QII.ipa
+
+          echo "IPA downloaded successfully."
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KGP-QII-iOS-IPA
+          path: source/Khmer-Game-Portal/artifacts/khmer-game-port/output/KGP-QII.ipa
+          if-no-files-found: error
+          retention-days: 7
