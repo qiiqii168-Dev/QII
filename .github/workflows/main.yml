@@ -1,155 +1,139 @@
 name: Build KGP QII iOS IPA
-
 on:
-  workflow_dispatch:
-  push:
-    paths:
-      - 'KGP_QII_NEW_EAS_PROJECT.zip'
-      - '.github/workflows/main.yml'
-
+workflow_dispatch:
+push:
+paths:
+- ‘KGP_QII_NEW_EAS_PROJECT_ADHOC.zip’
+- ‘.github/workflows/main.yml’
 permissions:
-  contents: read
-
+contents: read
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+build:
+runs-on: ubuntu-latest
+timeout-minutes: 60
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  - name: Setup pnpm
+    uses: pnpm/action-setup@v4
+    with:
+      version: 10
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
+  - name: Setup Node.js
+    uses: actions/setup-node@v4
+    with:
+      node-version: 22
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
+  - name: Extract project ZIP
+    run: |
+      set -e
+      test -f 'KGP_QII_NEW_EAS_PROJECT_ADHOC.zip'
+      mkdir -p source
+      unzip -q 'KGP_QII_NEW_EAS_PROJECT_ADHOC.zip' -d source
+      test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
+      test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
+      test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/eas.json
 
-      - name: Extract project ZIP
-        run: |
-          test -f 'KGP_QII_NEW_EAS_PROJECT.zip'
-          mkdir -p source
-          unzip -q 'KGP_QII_NEW_EAS_PROJECT.zip' -d source
+  - name: Install workspace dependencies
+    working-directory: source/Khmer-Game-Portal
+    run: pnpm install --no-frozen-lockfile
 
-          test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
-          test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
+  - name: Configure new EAS project
+    working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    run: |
+      set -e
+      test -n "$EXPO_TOKEN"
 
-      - name: Install workspace dependencies
-        working-directory: source/Khmer-Game-Portal
-        run: |
-          pnpm install --no-frozen-lockfile
+      python - <<'PY'
+      import json
 
-      - name: Configure new EAS project
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          set -e
+      path = "app.json"
+      with open(path, "r", encoding="utf-8") as f:
+          data = json.load(f)
 
-          test -n "$EXPO_TOKEN"
+      expo = data.setdefault("expo", {})
+      expo["owner"] = "qiiqii168"
 
-          python - <<'PY'
-          import json
+      ios = expo.setdefault("ios", {})
+      info = ios.setdefault("infoPlist", {})
+      info["ITSAppUsesNonExemptEncryption"] = False
 
-          path = "app.json"
+      with open(path, "w", encoding="utf-8") as f:
+          json.dump(data, f, indent=2, ensure_ascii=False)
+          f.write("\n")
+      PY
 
-          with open(path, "r", encoding="utf-8") as f:
-              data = json.load(f)
+      pnpm dlx eas-cli@latest init \
+        --account qiiqii168 \
+        --non-interactive
 
-          expo = data.setdefault("expo", {})
-          expo["owner"] = "qiiqii168"
+  - name: Build iOS IPA with EAS
+    id: eas-build
+    working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    shell: bash
+    run: |
+      set -euo pipefail
 
-          with open(path, "w", encoding="utf-8") as f:
-              json.dump(data, f, indent=2, ensure_ascii=False)
-              f.write("\n")
+      pnpm dlx eas-cli@latest build \
+        --platform ios \
+        --profile production \
+        --wait \
+        --non-interactive \
+        --json > "$RUNNER_TEMP/eas-build.json"
 
-          print("Expo owner configured: qiiqii168")
-          PY
+      BUILD_ID=$(python - <<'PY'
+      import json
+      import os
 
-          pnpm dlx eas-cli@latest init \
-            --account qiiqii168 \
-            --non-interactive
+      path = os.path.join(os.environ["RUNNER_TEMP"], "eas-build.json")
+      with open(path, "r") as f:
+          data = json.load(f)
 
-      - name: Build iOS IPA with EAS
-        id: eas-build
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        shell: bash
-        run: |
-          set -e
-          set -o pipefail
+      if isinstance(data, list):
+          data = data[-1]
 
-          pnpm dlx eas-cli@latest build \
-            --platform ios \
-            --profile production \
-            --wait \
-            --non-interactive \
-            --json > "$RUNNER_TEMP/eas-build.json"
+      if isinstance(data, dict) and isinstance(data.get("build"), dict):
+          data = data["build"]
 
-          BUILD_ID=$(python - <<'PY'
-          import json
-          import os
+      build_id = data.get("id") if isinstance(data, dict) else None
+      if not build_id:
+          raise SystemExit("Could not read EAS build ID")
 
-          path = os.path.join(
-              os.environ["RUNNER_TEMP"],
-              "eas-build.json"
-          )
+      print(build_id)
+      PY
+      )
 
-          with open(path, "r") as f:
-              data = json.load(f)
+      echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
 
-          if isinstance(data, list):
-              data = data[-1]
+      pnpm dlx eas-cli@latest build:download \
+        --build-id "$BUILD_ID" \
+        --non-interactive
 
-          if isinstance(data, dict) and isinstance(data.get("build"), dict):
-              data = data["build"]
+  - name: Find IPA
+    run: |
+      set -e
 
-          build_id = data.get("id") if isinstance(data, dict) else None
+      IPA_PATH=$(find source/Khmer-Game-Portal/artifacts/khmer-game-port \
+        -type f -name '*.ipa' -print -quit)
 
-          if not build_id:
-              raise SystemExit("Could not read EAS build ID")
+      if [ -z "$IPA_PATH" ]; then
+        IPA_PATH=$(find . -type f -name '*.ipa' -print -quit)
+      fi
 
-          print(build_id)
-          PY
-          )
+      test -n "$IPA_PATH"
 
-          echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+      mkdir -p output
+      cp "$IPA_PATH" output/KGP-QII.ipa
 
-          pnpm dlx eas-cli@latest build:download \
-            --build-id "$BUILD_ID" \
-            --non-interactive
-
-      - name: Find IPA
-        id: ipa
-        run: |
-          set -e
-
-          IPA_PATH=$(find source/Khmer-Game-Portal/artifacts/khmer-game-port \
-            -type f -name '*.ipa' -print -quit)
-
-          if [ -z "$IPA_PATH" ]; then
-            IPA_PATH=$(find . -type f -name '*.ipa' -print -quit)
-          fi
-
-          if [ -z "$IPA_PATH" ]; then
-            echo "IPA file not found"
-            exit 1
-          fi
-
-          mkdir -p output
-          cp "$IPA_PATH" output/KGP-QII.ipa
-
-          echo "path=output/KGP-QII.ipa" >> "$GITHUB_OUTPUT"
-
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: KGP-QII-iOS-IPA
-          path: output/KGP-QII.ipa
-          if-no-files-found: error
-          retention-days: 7
+  - name: Upload IPA artifact
+    uses: actions/upload-artifact@v4
+    with:
+      name: KGP-QII-iOS-IPA
+      path: output/KGP-QII.ipa
+      if-no-files-found: error
+      retention-days: 7
