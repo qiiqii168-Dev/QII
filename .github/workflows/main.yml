@@ -145,7 +145,7 @@ jobs:
           print("Selected scheme:", selected)
           PY
 
-      # 10. Build unsigned app using Debug configuration for Xcode 16 stability
+      # 10. Build for iOS Simulator (Bypasses all device signing and EmitSwiftModule errors)
       - name: Build Unsigned iOS App
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -168,15 +168,13 @@ jobs:
             -workspace "${{ env.KGP_WORKSPACE }}" \
             -scheme "${{ env.KGP_SCHEME }}" \
             -configuration Debug \
-            -sdk iphoneos \
-            -destination "generic/platform=iOS" \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
             -derivedDataPath "$DERIVED_DATA" \
             -resultBundlePath "$RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            EXPANDED_CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
             build 2>&1 | tee "$BUILD_LOG"
 
           echo "===== BUILD PRODUCTS ====="
