@@ -93,17 +93,25 @@ jobs:
           test -f ios/Podfile
           echo "iOS generated."
 
-      # 8. Install CocoaPods
+      # 8. Install CocoaPods with modular headers fix for Expo modules
       - name: Install CocoaPods
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
         shell: bash
         run: |
           set -euo pipefail
           rm -rf Pods Podfile.lock
-          pod install
-          echo "Pods installed."
+          
+          # Append use_modular_headers! to Podfile to fix Swift 'no such module Expo' errors
+          if ! grep -q "use_modular_headers!" Podfile; then
+            sed -i '' '1i\
+            use_modular_headers!\
+            ' Podfile
+          fi
 
-      # 9. Build using xcodebuild with explicit NODE_BINARY fix
+          pod install
+          echo "Pods installed successfully."
+
+      # 9. Build using xcodebuild with clean build folder and proper settings
       - name: Build Unsigned App (Simulator)
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -126,6 +134,8 @@ jobs:
           DERIVED_DATA="$RUNNER_TEMP/DerivedData"
           NODE_PATH=$(command -v node)
           
+          xcodebuild clean -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Debug -sdk iphonesimulator
+          
           xcodebuild \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
@@ -137,6 +147,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             build
 
           echo "Build finished successfully."
