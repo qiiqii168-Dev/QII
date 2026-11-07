@@ -95,7 +95,7 @@ jobs:
           test -f ios/Podfile
           echo "iOS project generated."
 
-      # 8. Install CocoaPods and fix Swift compiler flags for unsigned builds
+      # 8. Install CocoaPods
       - name: Install CocoaPods
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
         shell: bash
@@ -103,10 +103,6 @@ jobs:
           set -euo pipefail
           rm -rf Pods Podfile.lock
           pod install
-          
-          # Patch Pods project to bypass strict Swift emit module signing issues on Xcode 16
-          echo "Patching Podfile configurations if needed..."
-          cd ..
           echo "CocoaPods installed successfully."
 
       # 9. Discover Xcode workspace and scheme
@@ -149,7 +145,7 @@ jobs:
           print("Selected scheme:", selected)
           PY
 
-      # 10. Build unsigned app with overridden flags for Xcode 16 Swift Emit Module
+      # 10. Build unsigned app using Debug configuration for Xcode 16 stability
       - name: Build Unsigned iOS App
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -171,7 +167,7 @@ jobs:
           xcodebuild \
             -workspace "${{ env.KGP_WORKSPACE }}" \
             -scheme "${{ env.KGP_SCHEME }}" \
-            -configuration Release \
+            -configuration Debug \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -derivedDataPath "$DERIVED_DATA" \
