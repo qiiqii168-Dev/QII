@@ -1,4 +1,3 @@
-
 name: Build KGP QII Unsigned iOS IPA
 
 "on":
@@ -147,7 +146,8 @@ jobs:
 
           WORKSPACE="$PWD/${WORKSPACE#./}"
 
-          echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
+          # Export WORKSPACE to GITHUB_ENV properly
+          echo "KGP_WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
 
           echo "===== WORKSPACE ====="
           echo "$WORKSPACE"
@@ -206,14 +206,14 @@ jobs:
           rm -rf "$RESULT_BUNDLE"
 
           echo "===== BUILD INFORMATION ====="
-          echo "Workspace: $WORKSPACE"
-          echo "Scheme: $KGP_SCHEME"
+          echo "Workspace: ${{ env.KGP_WORKSPACE }}"
+          echo "Scheme: ${{ env.KGP_SCHEME }}"
           echo "Bundle ID: com.qiiqii.khmergameport"
           echo "=============================="
 
           xcodebuild \
-            -workspace "$WORKSPACE" \
-            -scheme "$KGP_SCHEME" \
+            -workspace "${{ env.KGP_WORKSPACE }}" \
+            -scheme "${{ env.KGP_SCHEME }}" \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
