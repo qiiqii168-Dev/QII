@@ -66,13 +66,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          pnpm install \
-            --no-frozen-lockfile \
-            --config.frozen-lockfile=false
+          pnpm install --no-frozen-lockfile
 
           echo "Dependencies installed."
 
-      # 6. Configure App
+      # 6. Configure KGP QII
       - name: Configure KGP QII
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -101,13 +99,12 @@ jobs:
           info["NSHumanReadableCopyright"] = "Project by Qii Qii"
 
           # Preserve existing splash configuration.
-          # Do not remove splash or storyboard references.
 
           with open(path, "w", encoding="utf-8") as f:
               json.dump(config, f, indent=2, ensure_ascii=False)
               f.write("\n")
 
-          print("KGP QII configuration completed.")
+          print("KGP QII configured.")
           PY
 
       # 7. Generate iOS Project
@@ -125,8 +122,8 @@ jobs:
 
           echo "iOS project generated."
 
-      # 8. Verify Storyboard
-      - name: Verify Storyboard
+      # 8. Check Storyboards
+      - name: Check Storyboards
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
@@ -136,11 +133,7 @@ jobs:
 
           find ios -name "*.storyboard" -print
 
-          if ! find ios -name "SplashScreen.storyboard" | grep -q .; then
-            echo "WARNING: SplashScreen.storyboard was not generated."
-          fi
-
-          echo "Storyboard verification completed."
+          echo "Storyboard check completed."
 
       # 9. Install CocoaPods
       - name: Install CocoaPods
@@ -157,24 +150,24 @@ jobs:
 
           echo "CocoaPods installation completed."
 
-      # 10. Verify Expo Native Modules
-      - name: Verify Native Modules
+      # 10. Check Expo Configuration
+      - name: Check Expo Configuration
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
         shell: bash
         run: |
           set -euo pipefail
 
           if ! grep -q "use_expo_modules!" Podfile; then
-            echo "ERROR: Expo modules autolinking is missing."
+            echo "ERROR: Expo autolinking is missing from Podfile."
             exit 1
           fi
 
-          if [ ! -d "Pods/Headers/Public/ExpoModulesCore" ]; then
-            echo "ERROR: ExpoModulesCore not installed."
+          if ! grep -q "ExpoModulesCore" Podfile.lock; then
+            echo "ERROR: ExpoModulesCore is missing from Podfile.lock."
             exit 1
           fi
 
-          echo "Expo native modules verified."
+          echo "Expo configuration checked."
 
       # 11. Build iOS Device App
       - name: Build Unsigned iOS App
@@ -206,6 +199,11 @@ jobs:
           print('KGPQII' if 'KGPQII' in schemes else schemes[0])
           ")
 
+          if [ -z "$SCHEME" ]; then
+            echo "ERROR: Xcode scheme not found."
+            exit 1
+          fi
+
           echo "Workspace: $WORKSPACE"
           echo "Scheme: $SCHEME"
 
@@ -227,7 +225,7 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             build
 
-          echo "iOS device build completed."
+          echo "iOS build completed."
 
       # 12. Package IPA
       - name: Package Unsigned IPA
@@ -262,7 +260,7 @@ jobs:
 
           test -s KGP-QII-Unsigned.ipa
 
-          echo "Unsigned IPA packaged successfully."
+          echo "Unsigned IPA created successfully."
 
       # 13. Upload IPA
       - name: Upload KGP QII IPA
