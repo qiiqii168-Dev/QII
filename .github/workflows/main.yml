@@ -44,15 +44,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           test -f "KGP V2.zip"
-
           mkdir -p source
           unzip -q "KGP V2.zip" -d source
-
           test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
           test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
-
           echo "KGP project extracted."
 
       # 5. Install dependencies
@@ -61,7 +57,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           pnpm install --no-frozen-lockfile
 
       # 6. Configure app
@@ -70,28 +65,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           python3 - <<'PY'
           import json
-
           with open("app.json", encoding="utf-8") as f:
               config = json.load(f)
-
           expo = config.setdefault("expo", {})
           ios = expo.setdefault("ios", {})
-
           expo["name"] = "KGP QII"
           expo["slug"] = "kgp-qii"
           ios["bundleIdentifier"] = "com.qiiqii.khmergameport"
           ios["supportsTablet"] = True
-
           info = ios.setdefault("infoPlist", {})
           info["NSHumanReadableCopyright"] = "Project by Qii Qii"
-
           with open("app.json", "w", encoding="utf-8") as f:
               json.dump(config, f, indent=2, ensure_ascii=False)
               f.write("\n")
-
           print("Bundle ID:", ios["bundleIdentifier"])
           PY
 
@@ -101,26 +89,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           pnpm exec expo prebuild \
             --platform ios \
             --clean \
             --no-install
-
           test -f ios/Podfile
-
           echo "iOS project generated."
 
-      # 8. Install CocoaPods
+      # 8. Install CocoaPods (Using absolute path & repo update)
       - name: Install CocoaPods
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
         shell: bash
         run: |
           set -euo pipefail
-
-          pod install
-
-          echo "CocoaPods installed."
+          pod repo update
+          pod install --repo-update
+          echo "CocoaPods installed successfully."
 
       # 9. Discover Xcode workspace and scheme
       - name: Discover Xcode Project
@@ -128,76 +112,46 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           echo "===== XCODE PROJECTS ====="
-          find . -maxdepth 3 \
-            \( -name "*.xcworkspace" -o -name "*.xcodeproj" \) \
-            -print
+          find . -maxdepth 3 \( -name "*.xcworkspace" -o -name "*.xcodeproj" \) -print
 
-          WORKSPACE=$(find . -maxdepth 3 \
-            -name "*.xcworkspace" \
-            ! -path "*/Pods/*" \
-            -print -quit)
-
+          WORKSPACE=$(find . -maxdepth 3 -name "*.xcworkspace" ! -path "*/Pods/*" -print -quit)
           if [ -z "$WORKSPACE" ]; then
             echo "ERROR: Xcode workspace not found."
             exit 1
           fi
 
           WORKSPACE="$PWD/${WORKSPACE#./}"
-
-          # Export WORKSPACE to GITHUB_ENV properly
           echo "KGP_WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
-
           echo "===== WORKSPACE ====="
           echo "$WORKSPACE"
 
           xcodebuild -list -workspace "$WORKSPACE"
-
-          xcodebuild -list -json -workspace "$WORKSPACE" \
-            > "$RUNNER_TEMP/kgp-xcode-list.json"
+          xcodebuild -list -json -workspace "$WORKSPACE" > "$RUNNER_TEMP/kgp-xcode-list.json"
 
           python3 - <<'PY'
           import json
           import os
-
-          path = os.path.join(
-              os.environ["RUNNER_TEMP"],
-              "kgp-xcode-list.json"
-          )
-
+          path = os.path.join(os.environ["RUNNER_TEMP"], "kgp-xcode-list.json")
           with open(path, encoding="utf-8") as f:
               data = json.load(f)
-
           schemes = data.get("workspace", {}).get("schemes", [])
-
           print("Available schemes:", schemes)
-
           if not schemes:
               raise SystemExit("ERROR: No Xcode schemes found.")
-
-          preferred = [
-              s for s in schemes
-              if any(word in s.lower() for word in (
-                  "app", "khmer", "game", "kgp"
-              ))
-          ]
-
+          preferred = [s for s in schemes if any(word in s.lower() for word in ("app", "khmer", "game", "kgp"))]
           selected = preferred[0] if preferred else schemes[0]
-
           with open(os.environ["GITHUB_ENV"], "a") as f:
               f.write(f"KGP_SCHEME={selected}\n")
-
           print("Selected scheme:", selected)
           PY
 
-      # 10. Build unsigned app and save full Xcode log
+      # 10. Build unsigned app with explicit Header Search Paths fixing Pod issues
       - name: Build Unsigned iOS App
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
-
           DERIVED_DATA="$RUNNER_TEMP/KGP-DerivedData"
           BUILD_LOG="$RUNNER_TEMP/kgp-xcode-build.log"
           RESULT_BUNDLE="$RUNNER_TEMP/KGP.xcresult"
@@ -225,9 +179,7 @@ jobs:
             build 2>&1 | tee "$BUILD_LOG"
 
           echo "===== BUILD PRODUCTS ====="
-
-          find "$DERIVED_DATA/Build/Products" \
-            -name "*.app" -print
+          find "$DERIVED_DATA/Build/Products" -name "*.app" -print
 
       # 11. Package unsigned IPA
       - name: Package Unsigned IPA
@@ -235,31 +187,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           PRODUCTS="$RUNNER_TEMP/KGP-DerivedData/Build/Products"
-
           test -d "$PRODUCTS"
-
           APP_PATH=""
 
           while IFS= read -r APP; do
-            BUNDLE_ID=$(/usr/libexec/PlistBuddy \
-              -c "Print :CFBundleIdentifier" \
-              "$APP/Info.plist" 2>/dev/null || true)
-
+            BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist" 2>/dev/null || true)
             echo "Candidate: $APP"
             echo "Bundle ID: $BUNDLE_ID"
-
             if [ "$BUNDLE_ID" = "com.qiiqii.khmergameport" ]; then
               APP_PATH="$APP"
               break
             fi
-          done < <(
-            find "$PRODUCTS" \
-              -type d \
-              -name "*.app" \
-              ! -path "*/XCFrameworkIntermediates/*"
-          )
+          done < <(find "$PRODUCTS" -type d -name "*.app" ! -path "*/XCFrameworkIntermediates/*")
 
           if [ -z "$APP_PATH" ]; then
             echo "ERROR: KGP app bundle not found."
@@ -268,17 +208,11 @@ jobs:
           fi
 
           echo "Selected app: $APP_PATH"
-
           mkdir -p output/Payload
-
           cp -R "$APP_PATH" output/Payload/
-
           cd output
-
           zip -qry KGP-QII-Unsigned.ipa Payload
-
           test -s KGP-QII-Unsigned.ipa
-
           echo "Unsigned IPA created."
           ls -lh KGP-QII-Unsigned.ipa
 
