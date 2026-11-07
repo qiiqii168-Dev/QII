@@ -23,6 +23,7 @@ jobs:
     timeout-minutes: 120
 
     steps:
+
       # 1. Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,23 +34,29 @@ jobs:
         with:
           version: 10
 
-      # 3. Setup Node
+      # 3. Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # 4. Extract project
+      # 4. Extract KGP V2 Project
       - name: Extract KGP V2 Project
         shell: bash
         run: |
           set -euo pipefail
+
           test -f "KGP V2.zip"
+
           mkdir -p source
+
           unzip -q "KGP V2.zip" -d source
+
           test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
+
           test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
-          echo "KGP project extracted."
+
+          echo "KGP project extracted successfully."
 
       # 5. Install dependencies
       - name: Install dependencies
@@ -57,36 +64,47 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           pnpm install --no-frozen-lockfile
 
-      # 6. Configure app & remove splash storyboard reference to prevent ibtool errors
+          echo "Dependencies installed."
+
+      # 6. Configure KGP iOS
       - name: Configure KGP iOS
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
+
           python3 - <<'PY'
           import json
+
           with open("app.json", encoding="utf-8") as f:
               config = json.load(f)
+
           expo = config.setdefault("expo", {})
           ios = expo.setdefault("ios", {})
+
           expo["name"] = "KGP QII"
           expo["slug"] = "kgp-qii"
+
           ios["bundleIdentifier"] = "com.qiiqii.khmergameport"
           ios["supportsTablet"] = True
-          
-          # Disable or remove splash image referencing troublesome storyboards if any
-          if "splash" in expo:
-              expo.pop("splash")
 
           info = ios.setdefault("infoPlist", {})
+
           info["NSHumanReadableCopyright"] = "Project by Qii Qii"
-          
+
           with open("app.json", "w", encoding="utf-8") as f:
-              json.dump(config, f, indent=2, ensure_ascii=False)
+              json.dump(
+                  config,
+                  f,
+                  indent=2,
+                  ensure_ascii=False
+              )
               f.write("\n")
-          print("Bundle ID configured & splash cleaned.")
+
+          print("KGP iOS configuration completed.")
           PY
 
       # 7. Generate native iOS project
@@ -95,19 +113,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pnpm exec expo prebuild --platform ios --clean
-          test -f ios/Podfile
-          echo "iOS generated."
 
-      # 8. Clean Storyboard files from iOS project directory to avoid ibtool linkage failures
-      - name: Purge Storyboard Files
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
+          pnpm exec expo prebuild --platform ios --clean
+
+          test -f ios/Podfile
+
+          echo "iOS project generated successfully."
+
+      # 8. Verify Storyboard files
+      - name: Verify Storyboard files
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
-          find . -name "*.storyboard" -delete
-          find . -name "*.xib" -delete
-          echo "Storyboard and XIB files purged successfully."
+
+          echo "Checking iOS Storyboard files..."
+
+          find ios -name "*.storyboard" -print
+
+          STORYBOARD=$(find ios -name "SplashScreen.storyboard" -print -quit)
+
+          if [ -z "$STORYBOARD" ]; then
+            echo "ERROR: SplashScreen.storyboard was not generated."
+            exit 1
+          fi
+
+          echo "Found SplashScreen: $STORYBOARD"
 
       # 9. Install CocoaPods
       - name: Install CocoaPods
@@ -115,33 +146,54 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf Pods Podfile.lock
-          pod install
-          echo "Pods installed successfully."
 
-      # 10. Build using xcodebuild
+          pod install
+
+          echo "CocoaPods installed successfully."
+
+      # 10. Build Unsigned App (Simulator)
       - name: Build Unsigned App (Simulator)
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
-          
-          WORKSPACE=$(find ios -maxdepth 2 -name "*.xcworkspace" ! -path "*/Pods/*" -print -quit)
+
+          WORKSPACE=$(find ios \
+            -maxdepth 3 \
+            -name "*.xcworkspace" \
+            ! -path "*/Pods/*" \
+            -print -quit)
+
+          if [ -z "$WORKSPACE" ]; then
+            echo "ERROR: Xcode workspace not found."
+            exit 1
+          fi
+
           WORKSPACE="$PWD/$WORKSPACE"
-          
-          SCHEME=$(xcodebuild -list -workspace "$WORKSPACE" -json | python3 -c "
-          import sys, json
+
+          SCHEME=$(xcodebuild \
+            -list \
+            -workspace "$WORKSPACE" \
+            -json | python3 -c "
+          import sys
+          import json
+
           data = json.load(sys.stdin)
           schemes = data.get('workspace', {}).get('schemes', [])
-          print(schemes[0] if schemes else 'KGPQII')
+
+          if not schemes:
+              raise SystemExit('ERROR: No Xcode schemes found.')
+
+          print('KGPQII' if 'KGPQII' in schemes else schemes[0])
           ")
 
           echo "Using Workspace: $WORKSPACE"
           echo "Using Scheme: $SCHEME"
 
           DERIVED_DATA="$RUNNER_TEMP/DerivedData"
+
           NODE_PATH=$(command -v node)
-          
+
           xcodebuild \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
@@ -156,35 +208,48 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             build
 
-          echo "Build finished successfully."
+          echo "Simulator build completed."
 
-      # 11. Package IPA
+      # 11. Package Unsigned IPA
       - name: Package Unsigned IPA
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
+
           PRODUCTS="$RUNNER_TEMP/DerivedData/Build/Products/Debug-iphonesimulator"
-          
-          APP_PATH=$(find "$PRODUCTS" -maxdepth 2 -type d -name "*.app" | head -n 1)
-          
+
+          APP_PATH=$(find "$PRODUCTS" \
+            -maxdepth 2 \
+            -type d \
+            -name "*.app" \
+            -print -quit)
+
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: .app not found"
+            echo "ERROR: Built .app not found."
             exit 1
           fi
 
           echo "Found app: $APP_PATH"
+
           mkdir -p output/Payload
+
           cp -R "$APP_PATH" output/Payload/
+
           cd output
+
           zip -qry KGP-QII-Unsigned.ipa Payload
-          echo "IPA created successfully."
+
+          test -f KGP-QII-Unsigned.ipa
+
+          echo "IPA package created successfully."
+
+          ls -lh KGP-QII-Unsigned.ipa
 
       # 12. Upload IPA
       - name: Upload KGP QII IPA
         uses: actions/upload-artifact@v4
         with:
           name: KGP-QII-Unsigned-IPA
-          path: source/Khmer-Game-Portal/artifacts/khmer-game-port/output/KGP-QII-Unsigned.ipa
+          path: output/KGP-QII-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
