@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           pnpm install --no-frozen-lockfile
 
-      # 6. Configure app
+      # 6. Configure app & remove splash storyboard reference to prevent ibtool errors
       - name: Configure KGP iOS
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -75,12 +75,18 @@ jobs:
           expo["slug"] = "kgp-qii"
           ios["bundleIdentifier"] = "com.qiiqii.khmergameport"
           ios["supportsTablet"] = True
+          
+          # Disable or remove splash image referencing troublesome storyboards if any
+          if "splash" in expo:
+              expo.pop("splash")
+
           info = ios.setdefault("infoPlist", {})
           info["NSHumanReadableCopyright"] = "Project by Qii Qii"
+          
           with open("app.json", "w", encoding="utf-8") as f:
               json.dump(config, f, indent=2, ensure_ascii=False)
               f.write("\n")
-          print("Bundle ID configured.")
+          print("Bundle ID configured & splash cleaned.")
           PY
 
       # 7. Generate native iOS project
@@ -93,7 +99,17 @@ jobs:
           test -f ios/Podfile
           echo "iOS generated."
 
-      # 8. Install CocoaPods cleanly with default untouched Podfile
+      # 8. Clean Storyboard files from iOS project directory to avoid ibtool linkage failures
+      - name: Purge Storyboard Files
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -name "*.storyboard" -delete
+          find . -name "*.xib" -delete
+          echo "Storyboard and XIB files purged successfully."
+
+      # 9. Install CocoaPods
       - name: Install CocoaPods
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
         shell: bash
@@ -103,7 +119,7 @@ jobs:
           pod install
           echo "Pods installed successfully."
 
-      # 9. Build using xcodebuild with standard Simulator SDK
+      # 10. Build using xcodebuild
       - name: Build Unsigned App (Simulator)
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -142,7 +158,7 @@ jobs:
 
           echo "Build finished successfully."
 
-      # 10. Package IPA
+      # 11. Package IPA
       - name: Package Unsigned IPA
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -164,7 +180,7 @@ jobs:
           zip -qry KGP-QII-Unsigned.ipa Payload
           echo "IPA created successfully."
 
-      # 11. Upload IPA
+      # 12. Upload IPA
       - name: Upload KGP QII IPA
         uses: actions/upload-artifact@v4
         with:
