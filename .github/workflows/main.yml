@@ -2,7 +2,6 @@ name: Build KGP QII Unsigned iOS IPA
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - main
@@ -40,14 +39,9 @@ jobs:
         uses: pnpm/action-setup@v4
         with:
           version: 10
+          run_install: false
 
-      # 4. Setup Ruby
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
-
-      # 5. Extract project
+      # 4. Extract Project
       - name: Extract KGP V2 Project
         shell: bash
         run: |
@@ -61,13 +55,11 @@ jobs:
 
           test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
 
-          test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/package.json
-
           test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
 
           echo "KGP project extracted successfully."
 
-      # 6. Install dependencies
+      # 5. Install Dependencies
       - name: Install Dependencies
         working-directory: source/Khmer-Game-Portal
         shell: bash
@@ -78,28 +70,9 @@ jobs:
             --no-frozen-lockfile \
             --config.frozen-lockfile=false
 
-          echo "Dependencies installed successfully."
+          echo "Dependencies installed."
 
-      # 7. Verify Expo
-      - name: Verify Expo Dependencies
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          pnpm exec expo --version
-
-          node -e "
-          const p = require('./package.json');
-          console.log('App:', p.name);
-          console.log('Expo:', p.dependencies?.expo || 'Not declared');
-          console.log('React Native:', p.dependencies?.['react-native'] || 'Not declared');
-          console.log('WebView:', p.dependencies?.['react-native-webview'] || 'Not declared');
-          "
-
-          echo "Expo dependencies verified."
-
-      # 8. Configure KGP QII
+      # 6. Configure App
       - name: Configure KGP QII
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -127,58 +100,91 @@ jobs:
 
           info["NSHumanReadableCopyright"] = "Project by Qii Qii"
 
+          # Preserve existing splash configuration.
+          # Do not remove splash or storyboard references.
+
           with open(path, "w", encoding="utf-8") as f:
               json.dump(config, f, indent=2, ensure_ascii=False)
               f.write("\n")
 
-          print("KGP QII configured successfully.")
+          print("KGP QII configuration completed.")
           PY
 
-      # 9. Generate iOS project
+      # 7. Generate iOS Project
       - name: Generate iOS Project
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
 
-          pnpm exec expo prebuild --platform ios --clean
+          pnpm exec expo prebuild \
+            --platform ios \
+            --clean
 
           test -f ios/Podfile
 
-          echo "iOS project generated successfully."
+          echo "iOS project generated."
 
-      # 10. Verify Expo native modules
-      - name: Verify Native Modules
+      # 8. Verify Storyboard
+      - name: Verify Storyboard
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
 
-          grep -n "use_expo_modules" ios/Podfile
+          echo "Checking storyboard files..."
 
-          echo "Expo autolinking configuration found."
+          find ios -name "*.storyboard" -print
 
-      # 11. Install CocoaPods
+          if ! find ios -name "SplashScreen.storyboard" | grep -q .; then
+            echo "WARNING: SplashScreen.storyboard was not generated."
+          fi
+
+          echo "Storyboard verification completed."
+
+      # 9. Install CocoaPods
       - name: Install CocoaPods
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
         shell: bash
         run: |
           set -euo pipefail
 
+          pod deintegrate || true
+
+          rm -rf Pods
+
           pod install --repo-update
 
-          test -f Pods/Manifest.lock
+          echo "CocoaPods installation completed."
 
-          echo "CocoaPods installed successfully."
+      # 10. Verify Expo Native Modules
+      - name: Verify Native Modules
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      # 12. Build unsigned iOS app
+          if ! grep -q "use_expo_modules!" Podfile; then
+            echo "ERROR: Expo modules autolinking is missing."
+            exit 1
+          fi
+
+          if [ ! -d "Pods/Headers/Public/ExpoModulesCore" ]; then
+            echo "ERROR: ExpoModulesCore not installed."
+            exit 1
+          fi
+
+          echo "Expo native modules verified."
+
+      # 11. Build iOS Device App
       - name: Build Unsigned iOS App
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
 
-          WORKSPACE=$(find ios -maxdepth 3 \
+          WORKSPACE=$(find ios \
+            -maxdepth 2 \
             -name "*.xcworkspace" \
             ! -path "*/Pods/*" \
             -print -quit)
@@ -195,17 +201,9 @@ jobs:
             -workspace "$WORKSPACE" \
             -json | python3 -c "
           import sys, json
-
           data = json.load(sys.stdin)
-
           schemes = data.get('workspace', {}).get('schemes', [])
-
-          if 'KGPQII' in schemes:
-              print('KGPQII')
-          elif schemes:
-              print(schemes[0])
-          else:
-              raise SystemExit('No Xcode scheme found')
+          print('KGPQII' if 'KGPQII' in schemes else schemes[0])
           ")
 
           echo "Workspace: $WORKSPACE"
@@ -229,9 +227,9 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             build
 
-          echo "Unsigned iOS build completed."
+          echo "iOS device build completed."
 
-      # 13. Package IPA
+      # 12. Package IPA
       - name: Package Unsigned IPA
         shell: bash
         run: |
@@ -252,21 +250,21 @@ jobs:
 
           echo "Found app: $APP_PATH"
 
-          rm -rf output
+          OUTPUT="$GITHUB_WORKSPACE/output"
 
-          mkdir -p output/Payload
+          mkdir -p "$OUTPUT/Payload"
 
-          cp -R "$APP_PATH" output/Payload/
+          cp -R "$APP_PATH" "$OUTPUT/Payload/"
 
-          cd output
+          cd "$OUTPUT"
 
           zip -qry KGP-QII-Unsigned.ipa Payload
 
           test -s KGP-QII-Unsigned.ipa
 
-          echo "IPA packaged successfully."
+          echo "Unsigned IPA packaged successfully."
 
-      # 14. Upload IPA
+      # 13. Upload IPA
       - name: Upload KGP QII IPA
         uses: actions/upload-artifact@v4
         with:
