@@ -24,40 +24,48 @@ jobs:
     timeout-minutes: 120
 
     steps:
+      # 1. Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Setup pnpm
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10
 
+      # 3. Setup Node
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
+      # 4. Extract project
       - name: Extract KGP V2 Project
         shell: bash
         run: |
           set -euo pipefail
 
           test -f "KGP V2.zip"
+
           mkdir -p source
           unzip -q "KGP V2.zip" -d source
 
           test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
           test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
 
-          echo "KGP V2 extracted successfully."
+          echo "KGP project extracted."
 
+      # 5. Install dependencies
       - name: Install dependencies
         working-directory: source/Khmer-Game-Portal
         shell: bash
         run: |
           set -euo pipefail
+
           pnpm install --no-frozen-lockfile
 
+      # 6. Configure app
       - name: Configure KGP iOS
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -67,7 +75,7 @@ jobs:
           python3 - <<'PY'
           import json
 
-          with open("app.json", "r", encoding="utf-8") as f:
+          with open("app.json", encoding="utf-8") as f:
               config = json.load(f)
 
           expo = config.setdefault("expo", {})
@@ -88,6 +96,7 @@ jobs:
           print("Bundle ID:", ios["bundleIdentifier"])
           PY
 
+      # 7. Generate native iOS project
       - name: Generate iOS project
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -100,8 +109,10 @@ jobs:
             --no-install
 
           test -f ios/Podfile
+
           echo "iOS project generated."
 
+      # 8. Install CocoaPods
       - name: Install CocoaPods
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
         shell: bash
@@ -109,31 +120,37 @@ jobs:
           set -euo pipefail
 
           pod install
-          echo "Pods installed."
 
-      - name: Discover Xcode Project and Schemes
+          echo "CocoaPods installed."
+
+      # 9. Discover Xcode workspace and scheme
+      - name: Discover Xcode Project
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== Xcode workspaces ==="
-          find . -maxdepth 2 -name "*.xcworkspace" -print
+          echo "===== XCODE PROJECTS ====="
+          find . -maxdepth 3 \
+            \( -name "*.xcworkspace" -o -name "*.xcodeproj" \) \
+            -print
 
-          echo "=== Xcode projects ==="
-          find . -maxdepth 2 -name "*.xcodeproj" -print
-
-          WORKSPACE=$(find . -maxdepth 2 \
+          WORKSPACE=$(find . -maxdepth 3 \
             -name "*.xcworkspace" \
             ! -path "*/Pods/*" \
             -print -quit)
 
           if [ -z "$WORKSPACE" ]; then
-            echo "ERROR: No Xcode workspace found."
+            echo "ERROR: Xcode workspace not found."
             exit 1
           fi
 
-          echo "WORKSPACE=$PWD/${WORKSPACE#./}" >> "$GITHUB_ENV"
+          WORKSPACE="$PWD/${WORKSPACE#./}"
+
+          echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
+
+          echo "===== WORKSPACE ====="
+          echo "$WORKSPACE"
 
           xcodebuild -list -workspace "$WORKSPACE"
 
@@ -159,13 +176,11 @@ jobs:
           if not schemes:
               raise SystemExit("ERROR: No Xcode schemes found.")
 
-          # Prefer an application scheme instead of a framework scheme.
           preferred = [
               s for s in schemes
-              if "app" in s.lower()
-              or "khmer" in s.lower()
-              or "game" in s.lower()
-              or "kgp" in s.lower()
+              if any(word in s.lower() for word in (
+                  "app", "khmer", "game", "kgp"
+              ))
           ]
 
           selected = preferred[0] if preferred else schemes[0]
@@ -176,6 +191,7 @@ jobs:
           print("Selected scheme:", selected)
           PY
 
+      # 10. Build unsigned app and save full Xcode log
       - name: Build Unsigned iOS App
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -183,9 +199,17 @@ jobs:
           set -euo pipefail
 
           DERIVED_DATA="$RUNNER_TEMP/KGP-DerivedData"
+          BUILD_LOG="$RUNNER_TEMP/kgp-xcode-build.log"
+          RESULT_BUNDLE="$RUNNER_TEMP/KGP.xcresult"
 
+          rm -rf "$DERIVED_DATA"
+          rm -rf "$RESULT_BUNDLE"
+
+          echo "===== BUILD INFORMATION ====="
           echo "Workspace: $WORKSPACE"
           echo "Scheme: $KGP_SCHEME"
+          echo "Bundle ID: com.qiiqii.khmergameport"
+          echo "=============================="
 
           xcodebuild \
             -workspace "$WORKSPACE" \
@@ -194,27 +218,27 @@ jobs:
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -derivedDataPath "$DERIVED_DATA" \
+            -resultBundlePath "$RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build
+            build 2>&1 | tee "$BUILD_LOG"
 
-          echo "=== Build products ==="
+          echo "===== BUILD PRODUCTS ====="
+
           find "$DERIVED_DATA/Build/Products" \
-            -maxdepth 5 -name "*.app" -print
+            -name "*.app" -print
 
+      # 11. Package unsigned IPA
       - name: Package Unsigned IPA
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
 
-          DERIVED_DATA="$RUNNER_TEMP/KGP-DerivedData"
-          PRODUCTS="$DERIVED_DATA/Build/Products"
+          PRODUCTS="$RUNNER_TEMP/KGP-DerivedData/Build/Products"
 
           test -d "$PRODUCTS"
-
-          echo "Searching for application bundle..."
 
           APP_PATH=""
 
@@ -223,7 +247,7 @@ jobs:
               -c "Print :CFBundleIdentifier" \
               "$APP/Info.plist" 2>/dev/null || true)
 
-            echo "Found candidate: $APP"
+            echo "Candidate: $APP"
             echo "Bundle ID: $BUNDLE_ID"
 
             if [ "$BUNDLE_ID" = "com.qiiqii.khmergameport" ]; then
@@ -239,7 +263,6 @@ jobs:
 
           if [ -z "$APP_PATH" ]; then
             echo "ERROR: KGP app bundle not found."
-            echo "All build products:"
             find "$PRODUCTS" -maxdepth 6 -print
             exit 1
           fi
@@ -247,6 +270,7 @@ jobs:
           echo "Selected app: $APP_PATH"
 
           mkdir -p output/Payload
+
           cp -R "$APP_PATH" output/Payload/
 
           cd output
@@ -255,13 +279,27 @@ jobs:
 
           test -s KGP-QII-Unsigned.ipa
 
-          echo "Unsigned IPA created:"
+          echo "Unsigned IPA created."
           ls -lh KGP-QII-Unsigned.ipa
 
+      # 12. Upload IPA
       - name: Upload KGP QII IPA
         uses: actions/upload-artifact@v4
         with:
           name: KGP-QII-Unsigned-IPA
           path: source/Khmer-Game-Portal/artifacts/khmer-game-port/output/KGP-QII-Unsigned.ipa
           if-no-files-found: error
+          retention-days: 7
+
+      # 13. Always upload diagnostic logs
+      - name: Upload Xcode Diagnostic Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KGP-QII-Xcode-Diagnostics
+          path: |
+            ${{ runner.temp }}/kgp-xcode-build.log
+            ${{ runner.temp }}/KGP.xcresult
+            ${{ runner.temp }}/kgp-xcode-list.json
+          if-no-files-found: warn
           retention-days: 7
