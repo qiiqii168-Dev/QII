@@ -1,9 +1,10 @@
-
-name: Build KGP QII iOS IPA
+name: Build KGP QII Unsigned iOS IPA
 
 "on":
   workflow_dispatch:
   push:
+    branches:
+      - main
     paths:
       - "KGP V2.zip"
       - ".github/workflows/main.yml"
@@ -17,27 +18,29 @@ concurrency:
 
 jobs:
   build:
-    name: Build KGP QII IPA
-    runs-on: ubuntu-latest
+    name: Build KGP QII Unsigned IPA
+    runs-on: macos-15
     timeout-minutes: 120
 
     steps:
+      # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Setup pnpm
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10
 
+      # 3. Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: KGP V2.zip
 
-      - name: Extract original project ZIP
+      # 4. Extract original project
+      - name: Extract KGP V2 Project
         shell: bash
         run: |
           set -euo pipefail
@@ -48,193 +51,196 @@ jobs:
 
           unzip -q "KGP V2.zip" -d source
 
-          test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
-          test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
+          test -f "source/Khmer-Game-Portal/pnpm-workspace.yaml"
+          test -f "source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json"
 
-          echo "Project extracted successfully."
+          echo "KGP V2 extracted successfully."
 
-      - name: Install workspace dependencies
+      # 5. Install workspace dependencies
+      - name: Install dependencies
         working-directory: source/Khmer-Game-Portal
         shell: bash
         run: |
           set -euo pipefail
+
           pnpm install --no-frozen-lockfile
 
-      - name: Configure KHMER GAME PORT
+          echo "Dependencies installed."
+
+      # 6. Configure iOS Bundle ID
+      - name: Configure KGP iOS
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
 
-          test -n "$EXPO_TOKEN"
-
-          python - <<'PY'
+          python3 - <<'PY'
           import json
-          import os
 
-          with open("app.json", "r", encoding="utf-8") as f:
+          path = "app.json"
+
+          with open(path, "r", encoding="utf-8") as f:
               config = json.load(f)
 
           expo = config.setdefault("expo", {})
-
-          expo["owner"] = "qiiqii168"
-          expo["slug"] = "kgp-qii"
-
           ios = expo.setdefault("ios", {})
 
+          expo["name"] = "KGP QII"
+          expo["slug"] = "kgp-qii"
+
           ios["bundleIdentifier"] = "com.qiiqii.khmergameport"
+          ios["supportsTablet"] = True
 
           info = ios.setdefault("infoPlist", {})
-          info["ITSAppUsesNonExemptEncryption"] = False
+          info["NSHumanReadableCopyright"] = "Project by Qii Qii"
 
-          # Remove buildNumber because EAS uses remote versioning.
-          ios.pop("buildNumber", None)
-
-          with open("app.json", "w", encoding="utf-8") as f:
+          with open(path, "w", encoding="utf-8") as f:
               json.dump(config, f, indent=2, ensure_ascii=False)
               f.write("\n")
 
-          eas_path = "eas.json"
-
-          if os.path.exists(eas_path):
-              with open(eas_path, "r", encoding="utf-8") as f:
-                  eas = json.load(f)
-          else:
-              eas = {}
-
-          eas.setdefault("cli", {})
-          eas["cli"]["appVersionSource"] = "remote"
-
-          profiles = eas.setdefault("build", {})
-
-          preview = profiles.setdefault("preview", {})
-          preview["distribution"] = "internal"
-
-          ios_preview = preview.setdefault("ios", {})
-          ios_preview["simulator"] = False
-
-          with open(eas_path, "w", encoding="utf-8") as f:
-              json.dump(eas, f, indent=2, ensure_ascii=False)
-              f.write("\n")
-
+          print("App configuration updated.")
           print("Bundle ID:", ios["bundleIdentifier"])
-          print("Encryption configured.")
-          print("Expo owner: qiiqii168")
-          print("Expo slug: kgp-qii")
-          print("Preview distribution: internal")
           PY
 
-          pnpm dlx eas-cli@latest init \
-            --account qiiqii168 \
-            --non-interactive
-
-          pnpm dlx eas-cli@latest project:info
-
-      - name: Verify iOS configuration
+      # 7. Generate native iOS project
+      - name: Generate iOS project
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
 
-          python - <<'PY'
-          import json
-
-          with open("app.json", encoding="utf-8") as f:
-              app = json.load(f)["expo"]
-
-          ios = app["ios"]
-
-          assert ios["bundleIdentifier"] == "com.qiiqii.khmergameport"
-          assert ios["infoPlist"]["ITSAppUsesNonExemptEncryption"] is False
-
-          print("iOS configuration verified.")
-          print("Bundle ID:", ios["bundleIdentifier"])
-          PY
-
-      - name: Build iOS Ad-hoc IPA
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Starting KGP QII iOS IPA build..."
-
-          pnpm dlx eas-cli@latest build \
+          pnpm exec expo prebuild \
             --platform ios \
-            --profile preview \
-            --non-interactive \
-            --wait \
-            --json > "$RUNNER_TEMP/eas-build.json"
+            --clean \
+            --no-install
 
-          echo "Build completed. Reading IPA URL..."
+          test -f ios/Podfile
 
-          BUILD_URL=$(python - <<'PY'
+          echo "Native iOS project generated."
+
+      # 8. Install CocoaPods
+      - name: Install CocoaPods
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pod install
+
+          echo "CocoaPods installed."
+
+      # 9. Build unsigned iOS application
+      - name: Build Unsigned iOS App
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IOS_DIR="$PWD/ios"
+          DERIVED_DATA="$RUNNER_TEMP/KGP-DerivedData"
+
+          WORKSPACE=$(find "$IOS_DIR" \
+            -maxdepth 1 \
+            -name "*.xcworkspace" \
+            -print -quit)
+
+          if [ -z "$WORKSPACE" ]; then
+            echo "ERROR: Xcode workspace not found."
+            exit 1
+          fi
+
+          echo "Workspace: $WORKSPACE"
+
+          xcodebuild -list -json -workspace "$WORKSPACE" \
+            > "$RUNNER_TEMP/xcode-list.json"
+
+          SCHEME=$(python3 - <<'PY'
           import json
           import os
 
           path = os.path.join(
               os.environ["RUNNER_TEMP"],
-              "eas-build.json"
+              "xcode-list.json"
           )
 
           with open(path, encoding="utf-8") as f:
               data = json.load(f)
 
-          def find_url(obj):
-              if isinstance(obj, dict):
-                  artifacts = obj.get("artifacts")
+          schemes = data.get("workspace", {}).get("schemes", [])
 
-                  if isinstance(artifacts, dict):
-                      for key in (
-                          "buildUrl",
-                          "applicationArchiveUrl"
-                      ):
-                          value = artifacts.get(key)
-                          if value:
-                              return value
+          if not schemes:
+              raise SystemExit("ERROR: No Xcode scheme found.")
 
-                  for value in obj.values():
-                      result = find_url(value)
-                      if result:
-                          return result
-
-              elif isinstance(obj, list):
-                  for item in obj:
-                      result = find_url(item)
-                      if result:
-                          return result
-
-              return None
-
-          url = find_url(data)
-
-          if not url:
-              raise SystemExit("IPA download URL not found.")
-
-          print(url)
+          print(schemes[0])
           PY
           )
 
-          mkdir -p output
+          echo "Using scheme: $SCHEME"
 
-          curl --fail --location --retry 3 \
-            "$BUILD_URL" \
-            --output output/KGP-QII.ipa
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
 
-          test -s output/KGP-QII.ipa
+          echo "Unsigned iOS build completed."
 
-          echo "IPA downloaded successfully."
+      # 10. Package unsigned IPA
+      - name: Package Unsigned IPA
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          ls -lh output/KGP-QII.ipa
+          APP_DIR="$RUNNER_TEMP/KGP-DerivedData/Build/Products/Release-iphoneos"
 
-      - name: Upload IPA artifact
+          test -d "$APP_DIR"
+
+          APP_PATH=""
+
+          while IFS= read -r APP; do
+            BUNDLE_ID=$(/usr/libexec/PlistBuddy \
+              -c "Print :CFBundleIdentifier" \
+              "$APP/Info.plist" 2>/dev/null || true)
+
+            if [ "$BUNDLE_ID" = "com.qiiqii.khmergameport" ]; then
+              APP_PATH="$APP"
+              break
+            fi
+          done < <(find "$APP_DIR" -maxdepth 1 -type d -name "*.app")
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: KGP application bundle not found."
+            find "$APP_DIR" -maxdepth 2 -print
+            exit 1
+          fi
+
+          echo "Found app: $APP_PATH"
+
+          mkdir -p output/Payload
+
+          cp -R "$APP_PATH" output/Payload/
+
+          cd output
+
+          zip -qry KGP-QII-Unsigned.ipa Payload
+
+          test -s KGP-QII-Unsigned.ipa
+
+          echo "Unsigned IPA created successfully."
+
+          ls -lh KGP-QII-Unsigned.ipa
+
+      # 11. Upload IPA to GitHub Actions
+      - name: Upload KGP QII IPA
         uses: actions/upload-artifact@v4
         with:
-          name: KGP-QII-iOS-IPA
-          path: source/Khmer-Game-Portal/artifacts/khmer-game-port/output/KGP-QII.ipa
+          name: KGP-QII-Unsigned-IPA
+          path: source/Khmer-Game-Portal/artifacts/khmer-game-port/output/KGP-QII-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
