@@ -103,7 +103,7 @@ jobs:
           pod install
           echo "Pods installed."
 
-      # 9. Build using xcodebuild with Simulator SDK (Completely offline, no token, no signing)
+      # 9. Build using xcodebuild with explicit NODE_BINARY fix
       - name: Build Unsigned App (Simulator)
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -113,7 +113,6 @@ jobs:
           WORKSPACE=$(find ios -maxdepth 2 -name "*.xcworkspace" ! -path "*/Pods/*" -print -quit)
           WORKSPACE="$PWD/$WORKSPACE"
           
-          # Find scheme automatically
           SCHEME=$(xcodebuild -list -workspace "$WORKSPACE" -json | python3 -c "
           import sys, json
           data = json.load(sys.stdin)
@@ -125,6 +124,7 @@ jobs:
           echo "Using Scheme: $SCHEME"
 
           DERIVED_DATA="$RUNNER_TEMP/DerivedData"
+          NODE_PATH=$(command -v node)
           
           xcodebuild \
             -workspace "$WORKSPACE" \
@@ -133,6 +133,7 @@ jobs:
             -sdk iphonesimulator \
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath "$DERIVED_DATA" \
+            NODE_BINARY="$NODE_PATH" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
