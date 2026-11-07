@@ -91,19 +91,18 @@ jobs:
           set -euo pipefail
           pnpm exec expo prebuild \
             --platform ios \
-            --clean \
-            --no-install
+            --clean
           test -f ios/Podfile
           echo "iOS project generated."
 
-      # 8. Install CocoaPods (Using absolute path & repo update)
+      # 8. Clean and Install CocoaPods properly with gem environment
       - name: Install CocoaPods
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
         shell: bash
         run: |
           set -euo pipefail
-          pod repo update
-          pod install --repo-update
+          rm -rf Pods Podfile.lock
+          pod install
           echo "CocoaPods installed successfully."
 
       # 9. Discover Xcode workspace and scheme
@@ -146,7 +145,7 @@ jobs:
           print("Selected scheme:", selected)
           PY
 
-      # 10. Build unsigned app with explicit Header Search Paths fixing Pod issues
+      # 10. Build unsigned app with clean derived data
       - name: Build Unsigned iOS App
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
