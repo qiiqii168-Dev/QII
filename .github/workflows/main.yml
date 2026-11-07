@@ -1,3 +1,4 @@
+
 name: Build KGP QII iOS IPA
 
 "on":
@@ -10,11 +11,15 @@ name: Build KGP QII iOS IPA
 permissions:
   contents: read
 
+concurrency:
+  group: kgp-qii-ios-build
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build KGP QII IPA
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repository
@@ -29,11 +34,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
+          cache-dependency-path: KGP V2.zip
 
       - name: Extract original project ZIP
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           test -f "KGP V2.zip"
 
@@ -48,16 +55,18 @@ jobs:
 
       - name: Install workspace dependencies
         working-directory: source/Khmer-Game-Portal
+        shell: bash
         run: |
+          set -euo pipefail
           pnpm install --no-frozen-lockfile
 
-      - name: Configure Expo project
+      - name: Configure KHMER GAME PORT
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           test -n "$EXPO_TOKEN"
 
@@ -65,48 +74,84 @@ jobs:
           import json
           import os
 
-          app_path = "app.json"
+          with open("app.json", "r", encoding="utf-8") as f:
+              config = json.load(f)
 
-          with open(app_path, "r", encoding="utf-8") as f:
-              app = json.load(f)
+          expo = config.setdefault("expo", {})
 
-          expo = app.setdefault("expo", {})
           expo["owner"] = "qiiqii168"
           expo["slug"] = "kgp-qii"
 
-          with open(app_path, "w", encoding="utf-8") as f:
-              json.dump(app, f, indent=2, ensure_ascii=False)
+          ios = expo.setdefault("ios", {})
+
+          ios["bundleIdentifier"] = "com.qiiqii.khmergameport"
+
+          info = ios.setdefault("infoPlist", {})
+          info["ITSAppUsesNonExemptEncryption"] = False
+
+          # Remove buildNumber because EAS uses remote versioning.
+          ios.pop("buildNumber", None)
+
+          with open("app.json", "w", encoding="utf-8") as f:
+              json.dump(config, f, indent=2, ensure_ascii=False)
               f.write("\n")
 
           eas_path = "eas.json"
 
           if os.path.exists(eas_path):
               with open(eas_path, "r", encoding="utf-8") as f:
-                  config = json.load(f)
+                  eas = json.load(f)
           else:
-              config = {}
+              eas = {}
 
-          profiles = config.setdefault("build", {})
+          eas.setdefault("cli", {})
+          eas["cli"]["appVersionSource"] = "remote"
 
-          profiles["preview"] = {
-              "distribution": "internal",
-              "ios": {
-                  "simulator": False
-              }
-          }
+          profiles = eas.setdefault("build", {})
+
+          preview = profiles.setdefault("preview", {})
+          preview["distribution"] = "internal"
+
+          ios_preview = preview.setdefault("ios", {})
+          ios_preview["simulator"] = False
 
           with open(eas_path, "w", encoding="utf-8") as f:
-              json.dump(config, f, indent=2, ensure_ascii=False)
+              json.dump(eas, f, indent=2, ensure_ascii=False)
               f.write("\n")
 
+          print("Bundle ID:", ios["bundleIdentifier"])
+          print("Encryption configured.")
           print("Expo owner: qiiqii168")
-          print("Project slug: kgp-qii")
-          print("Distribution: internal")
+          print("Expo slug: kgp-qii")
+          print("Preview distribution: internal")
           PY
 
           pnpm dlx eas-cli@latest init \
             --account qiiqii168 \
             --non-interactive
+
+          pnpm dlx eas-cli@latest project:info
+
+      - name: Verify iOS configuration
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import json
+
+          with open("app.json", encoding="utf-8") as f:
+              app = json.load(f)["expo"]
+
+          ios = app["ios"]
+
+          assert ios["bundleIdentifier"] == "com.qiiqii.khmergameport"
+          assert ios["infoPlist"]["ITSAppUsesNonExemptEncryption"] is False
+
+          print("iOS configuration verified.")
+          print("Bundle ID:", ios["bundleIdentifier"])
+          PY
 
       - name: Build iOS Ad-hoc IPA
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
@@ -114,15 +159,18 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         shell: bash
         run: |
-          set -e
-          set -o pipefail
+          set -euo pipefail
+
+          echo "Starting KGP QII iOS IPA build..."
 
           pnpm dlx eas-cli@latest build \
             --platform ios \
             --profile preview \
-            --wait \
             --non-interactive \
+            --wait \
             --json > "$RUNNER_TEMP/eas-build.json"
+
+          echo "Build completed. Reading IPA URL..."
 
           BUILD_URL=$(python - <<'PY'
           import json
@@ -133,7 +181,7 @@ jobs:
               "eas-build.json"
           )
 
-          with open(path, "r", encoding="utf-8") as f:
+          with open(path, encoding="utf-8") as f:
               data = json.load(f)
 
           def find_url(obj):
@@ -173,12 +221,15 @@ jobs:
 
           mkdir -p output
 
-          curl -fL "$BUILD_URL" \
-            -o output/KGP-QII.ipa
+          curl --fail --location --retry 3 \
+            "$BUILD_URL" \
+            --output output/KGP-QII.ipa
 
           test -s output/KGP-QII.ipa
 
           echo "IPA downloaded successfully."
+
+          ls -lh output/KGP-QII.ipa
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
