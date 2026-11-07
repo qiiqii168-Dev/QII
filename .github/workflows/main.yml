@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           pnpm install --no-frozen-lockfile
 
-      # 6. Configure app & eas.json for local unsigned build
+      # 6. Configure app & eas.json for local offline build
       - name: Configure KGP iOS & EAS
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
@@ -83,7 +83,6 @@ jobs:
           print("Bundle ID configured successfully.")
           PY
 
-          # Create eas.json for simulator/unsigned local build
           cat << 'EOF' > eas.json
           {
             "cli": {
@@ -108,13 +107,16 @@ jobs:
         shell: bash
         run: npm install -g eas-cli
 
-      # 8. Build using EAS Local Build (Simulator mode for ESign compatibility)
+      # 8. Build using EAS Local Build with dummy token env to bypass login prompt
       - name: Build with EAS Local
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
+        env:
+          EXPO_TOKEN: "dummy_token_to_bypass_login_check_on_ci"
+          CI: "1"
         shell: bash
         run: |
           set -euo pipefail
-          # Run local build targeting simulator architecture (arm64) to get clean unsigned app
+          # Running local build targeting simulator/development profile
           eas build --platform ios --profile development --local --non-interactive
 
           echo "Finding built artifacts..."
@@ -127,7 +129,6 @@ jobs:
         run: |
           set -euo pipefail
           
-          # EAS local build usually outputs a .app or .ipa directly in the folder
           APP_PATH=$(find . -maxdepth 4 -type d -name "*.app" ! -path "*/Pods/*" | head -n 1)
           
           if [ -z "$APP_PATH" ]; then
