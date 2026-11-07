@@ -59,8 +59,8 @@ jobs:
           set -euo pipefail
           pnpm install --no-frozen-lockfile
 
-      # 6. Configure app
-      - name: Configure KGP iOS
+      # 6. Configure app & eas.json for local unsigned build
+      - name: Configure KGP iOS & EAS
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
@@ -80,159 +80,76 @@ jobs:
           with open("app.json", "w", encoding="utf-8") as f:
               json.dump(config, f, indent=2, ensure_ascii=False)
               f.write("\n")
-          print("Bundle ID:", ios["bundleIdentifier"])
+          print("Bundle ID configured successfully.")
           PY
 
-      # 7. Generate native iOS project
-      - name: Generate iOS project
+          # Create eas.json for simulator/unsigned local build
+          cat << 'EOF' > eas.json
+          {
+            "cli": {
+              "version": ">= 12.0.0"
+            },
+            "build": {
+              "development": {
+                "developmentClient": true,
+                "distribution": "internal"
+              },
+              "preview": {
+                "distribution": "internal"
+              },
+              "production": {}
+            }
+          }
+          EOF
+          echo "eas.json created."
+
+      # 7. Install EAS CLI globally
+      - name: Install EAS CLI
+        shell: bash
+        run: npm install -g eas-cli
+
+      # 8. Build using EAS Local Build (Simulator mode for ESign compatibility)
+      - name: Build with EAS Local
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
-          pnpm exec expo prebuild \
-            --platform ios \
-            --clean
-          test -f ios/Podfile
-          echo "iOS project generated."
+          # Run local build targeting simulator architecture (arm64) to get clean unsigned app
+          eas build --platform ios --profile development --local --non-interactive
 
-      # 8. Install CocoaPods
-      - name: Install CocoaPods
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf Pods Podfile.lock
-          pod install
-          echo "CocoaPods installed successfully."
+          echo "Finding built artifacts..."
+          find . -name "*.app" -o -name "*.ipa"
 
-      # 9. Discover Xcode workspace and scheme
-      - name: Discover Xcode Project
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "===== XCODE PROJECTS ====="
-          find . -maxdepth 3 \( -name "*.xcworkspace" -o -name "*.xcodeproj" \) -print
-
-          WORKSPACE=$(find . -maxdepth 3 -name "*.xcworkspace" ! -path "*/Pods/*" -print -quit)
-          if [ -z "$WORKSPACE" ]; then
-            echo "ERROR: Xcode workspace not found."
-            exit 1
-          fi
-
-          WORKSPACE="$PWD/${WORKSPACE#./}"
-          echo "KGP_WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
-          echo "===== WORKSPACE ====="
-          echo "$WORKSPACE"
-
-          xcodebuild -list -workspace "$WORKSPACE"
-          xcodebuild -list -json -workspace "$WORKSPACE" > "$RUNNER_TEMP/kgp-xcode-list.json"
-
-          python3 - <<'PY'
-          import json
-          import os
-          path = os.path.join(os.environ["RUNNER_TEMP"], "kgp-xcode-list.json")
-          with open(path, encoding="utf-8") as f:
-              data = json.load(f)
-          schemes = data.get("workspace", {}).get("schemes", [])
-          print("Available schemes:", schemes)
-          if not schemes:
-              raise SystemExit("ERROR: No Xcode schemes found.")
-          preferred = [s for s in schemes if any(word in s.lower() for word in ("app", "khmer", "game", "kgp"))]
-          selected = preferred[0] if preferred else schemes[0]
-          with open(os.environ["GITHUB_ENV"], "a") as f:
-              f.write(f"KGP_SCHEME={selected}\n")
-          print("Selected scheme:", selected)
-          PY
-
-      # 10. Build for iOS Simulator (Bypasses all device signing and EmitSwiftModule errors)
-      - name: Build Unsigned iOS App
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-        shell: bash
-        run: |
-          set -euo pipefail
-          DERIVED_DATA="$RUNNER_TEMP/KGP-DerivedData"
-          BUILD_LOG="$RUNNER_TEMP/kgp-xcode-build.log"
-          RESULT_BUNDLE="$RUNNER_TEMP/KGP.xcresult"
-
-          rm -rf "$DERIVED_DATA"
-          rm -rf "$RESULT_BUNDLE"
-
-          echo "===== BUILD INFORMATION ====="
-          echo "Workspace: ${{ env.KGP_WORKSPACE }}"
-          echo "Scheme: ${{ env.KGP_SCHEME }}"
-          echo "Bundle ID: com.qiiqii.khmergameport"
-          echo "=============================="
-
-          xcodebuild \
-            -workspace "${{ env.KGP_WORKSPACE }}" \
-            -scheme "${{ env.KGP_SCHEME }}" \
-            -configuration Debug \
-            -sdk iphonesimulator \
-            -destination "generic/platform=iOS Simulator" \
-            -derivedDataPath "$DERIVED_DATA" \
-            -resultBundlePath "$RESULT_BUNDLE" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tee "$BUILD_LOG"
-
-          echo "===== BUILD PRODUCTS ====="
-          find "$DERIVED_DATA/Build/Products" -name "*.app" -print
-
-      # 11. Package unsigned IPA
+      # 9. Package unsigned IPA from EAS output
       - name: Package Unsigned IPA
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
-          PRODUCTS="$RUNNER_TEMP/KGP-DerivedData/Build/Products"
-          test -d "$PRODUCTS"
-          APP_PATH=""
-
-          while IFS= read -r APP; do
-            BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist" 2>/dev/null || true)
-            echo "Candidate: $APP"
-            echo "Bundle ID: $BUNDLE_ID"
-            if [ "$BUNDLE_ID" = "com.qiiqii.khmergameport" ]; then
-              APP_PATH="$APP"
-              break
-            fi
-          done < <(find "$PRODUCTS" -type d -name "*.app" ! -path "*/XCFrameworkIntermediates/*")
-
+          
+          # EAS local build usually outputs a .app or .ipa directly in the folder
+          APP_PATH=$(find . -maxdepth 4 -type d -name "*.app" ! -path "*/Pods/*" | head -n 1)
+          
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: KGP app bundle not found."
-            find "$PRODUCTS" -maxdepth 6 -print
+            echo "Searching for IPA..."
+            find . -maxdepth 4 -name "*.ipa"
             exit 1
           fi
 
-          echo "Selected app: $APP_PATH"
+          echo "Found app bundle: $APP_PATH"
           mkdir -p output/Payload
           cp -R "$APP_PATH" output/Payload/
           cd output
           zip -qry KGP-QII-Unsigned.ipa Payload
           test -s KGP-QII-Unsigned.ipa
-          echo "Unsigned IPA created."
+          echo "Unsigned IPA successfully created via EAS."
           ls -lh KGP-QII-Unsigned.ipa
 
-      # 12. Upload IPA
+      # 10. Upload IPA
       - name: Upload KGP QII IPA
         uses: actions/upload-artifact@v4
         with:
           name: KGP-QII-Unsigned-IPA
           path: source/Khmer-Game-Portal/artifacts/khmer-game-port/output/KGP-QII-Unsigned.ipa
           if-no-files-found: error
-          retention-days: 7
-
-      # 13. Always upload diagnostic logs
-      - name: Upload Xcode Diagnostic Logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: KGP-QII-Xcode-Diagnostics
-          path: |
-            ${{ runner.temp }}/kgp-xcode-build.log
-            ${{ runner.temp }}/KGP.xcresult
-            ${{ runner.temp }}/kgp-xcode-list.json
-          if-no-files-found: warn
           retention-days: 7
