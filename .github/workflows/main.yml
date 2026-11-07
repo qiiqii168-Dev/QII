@@ -18,13 +18,12 @@ concurrency:
 
 jobs:
   build:
-    name: Build KGP QII Unsigned IPA
+    name: Build KGP QII Unsigned iOS IPA
     runs-on: macos-15
     timeout-minutes: 120
 
     steps:
-
-      # 1. Checkout
+      # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -40,37 +39,43 @@ jobs:
         with:
           node-version: 22
 
-      # 4. Extract KGP V2 Project
+      # 4. Extract original project
       - name: Extract KGP V2 Project
         shell: bash
         run: |
           set -euo pipefail
 
-          test -f "KGP V2.zip"
+          if [ ! -f "KGP V2.zip" ]; then
+            echo "::error::KGP V2.zip not found!"
+            exit 1
+          fi
 
           mkdir -p source
-
           unzip -q "KGP V2.zip" -d source
 
-          test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
+          PROJECT_DIR="source/Khmer-Game-Portal"
 
-          test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
+          test -f "$PROJECT_DIR/pnpm-workspace.yaml"
+          test -f "$PROJECT_DIR/pnpm-lock.yaml"
+          test -f "$PROJECT_DIR/artifacts/khmer-game-port/package.json"
+          test -f "$PROJECT_DIR/artifacts/khmer-game-port/app.json"
+          test -f "$PROJECT_DIR/artifacts/khmer-game-port/modules/gta-engine/GTAEngine.podspec"
 
           echo "KGP project extracted successfully."
 
-      # 5. Install dependencies
-      - name: Install dependencies
+      # 5. Install workspace dependencies
+      - name: Install Dependencies
         working-directory: source/Khmer-Game-Portal
         shell: bash
         run: |
           set -euo pipefail
 
-          pnpm install --no-frozen-lockfile
+          pnpm install --frozen-lockfile
 
           echo "Dependencies installed."
 
-      # 6. Configure KGP iOS
-      - name: Configure KGP iOS
+      # 6. Configure KGP QII
+      - name: Configure KGP QII
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
@@ -79,7 +84,7 @@ jobs:
           python3 - <<'PY'
           import json
 
-          with open("app.json", encoding="utf-8") as f:
+          with open("app.json", "r", encoding="utf-8") as f:
               config = json.load(f)
 
           expo = config.setdefault("expo", {})
@@ -92,25 +97,23 @@ jobs:
           ios["supportsTablet"] = True
 
           info = ios.setdefault("infoPlist", {})
-
           info["NSHumanReadableCopyright"] = "Project by Qii Qii"
 
+          # Preserve all original plugins and splash configuration.
           with open("app.json", "w", encoding="utf-8") as f:
-              json.dump(
-                  config,
-                  f,
-                  indent=2,
-                  ensure_ascii=False
-              )
+              json.dump(config, f, indent=2, ensure_ascii=False)
               f.write("\n")
 
-          print("KGP iOS configuration completed.")
+          print("KGP QII configured.")
           PY
 
-      # 7. Generate native iOS project
-      - name: Generate iOS project
+      # 7. Generate iOS native project
+      - name: Generate iOS Project
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
+        env:
+          EXPO_USE_PRECOMPILED_MODULES: "0"
+          RCT_USE_PREBUILT_RNCORE: "0"
         run: |
           set -euo pipefail
 
@@ -118,88 +121,106 @@ jobs:
 
           test -f ios/Podfile
 
-          echo "iOS project generated successfully."
+          echo "iOS project generated."
 
-      # 8. Verify Storyboard files
-      - name: Verify Storyboard files
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
+      # 8. Install CocoaPods
+      - name: Install CocoaPods
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
         shell: bash
+        env:
+          EXPO_USE_PRECOMPILED_MODULES: "0"
+          RCT_USE_PREBUILT_RNCORE: "0"
         run: |
           set -euo pipefail
 
-          echo "Checking iOS Storyboard files..."
+          node --version
+          ruby --version
+          pod --version
 
-          find ios -name "*.storyboard" -print
+          rm -rf Pods
 
-          STORYBOARD=$(find ios -name "SplashScreen.storyboard" -print -quit)
+          EXPO_USE_PRECOMPILED_MODULES=0 \
+          RCT_USE_PREBUILT_RNCORE=0 \
+          pod install --repo-update
 
-          if [ -z "$STORYBOARD" ]; then
-            echo "ERROR: SplashScreen.storyboard was not generated."
-            exit 1
-          fi
+          test -f Pods/Manifest.lock
 
-          echo "Found SplashScreen: $STORYBOARD"
+          echo "CocoaPods installed successfully."
 
-      # 9. Install CocoaPods
-      - name: Install CocoaPods
+      # 9. Verify Expo and GTAEngine
+      - name: Verify Native Modules
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
         shell: bash
         run: |
           set -euo pipefail
 
-          pod install
+          if ! grep -q "ExpoModulesCore" Podfile.lock; then
+            echo "::error::ExpoModulesCore missing!"
+            exit 1
+          fi
 
-          echo "CocoaPods installed successfully."
+          if ! grep -q "GTAEngine" Podfile.lock; then
+            echo "::error::GTAEngine missing!"
+            exit 1
+          fi
 
-      # 10. Build Unsigned App (Simulator)
-      - name: Build Unsigned App (Simulator)
+          echo "Expo and GTAEngine detected."
+
+      # 10. Build unsigned iPhoneOS application
+      - name: Build Unsigned iOS App
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
+        env:
+          EXPO_USE_PRECOMPILED_MODULES: "0"
+          RCT_USE_PREBUILT_RNCORE: "0"
         run: |
           set -euo pipefail
 
           WORKSPACE=$(find ios \
-            -maxdepth 3 \
+            -maxdepth 2 \
             -name "*.xcworkspace" \
             ! -path "*/Pods/*" \
             -print -quit)
 
           if [ -z "$WORKSPACE" ]; then
-            echo "ERROR: Xcode workspace not found."
+            echo "::error::Xcode workspace not found!"
             exit 1
           fi
 
           WORKSPACE="$PWD/$WORKSPACE"
 
+          echo "Workspace: $WORKSPACE"
+
+          xcodebuild -list -workspace "$WORKSPACE"
+
           SCHEME=$(xcodebuild \
             -list \
             -workspace "$WORKSPACE" \
             -json | python3 -c "
-          import sys
-          import json
+          import sys, json
 
           data = json.load(sys.stdin)
           schemes = data.get('workspace', {}).get('schemes', [])
 
           if not schemes:
-              raise SystemExit('ERROR: No Xcode schemes found.')
+              raise SystemExit('No Xcode scheme found')
 
-          print('KGPQII' if 'KGPQII' in schemes else schemes[0])
+          print(schemes[0])
           ")
 
-          echo "Using Workspace: $WORKSPACE"
-          echo "Using Scheme: $SCHEME"
+          echo "Scheme: $SCHEME"
 
-          DERIVED_DATA="$RUNNER_TEMP/DerivedData"
-
+          DERIVED_DATA="$RUNNER_TEMP/KGPQII-DerivedData"
           NODE_PATH=$(command -v node)
 
+          EXPO_USE_PRECOMPILED_MODULES=0 \
+          RCT_USE_PREBUILT_RNCORE=0 \
           xcodebuild \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
-            -configuration Debug \
-            -sdk iphonesimulator \
-            -destination "generic/platform=iOS Simulator" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
             -derivedDataPath "$DERIVED_DATA" \
             NODE_BINARY="$NODE_PATH" \
             CODE_SIGNING_ALLOWED=NO \
@@ -208,48 +229,50 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             build
 
-          echo "Simulator build completed."
+          echo "iOS build completed."
 
-      # 11. Package Unsigned IPA
+      # 11. Package IPA
       - name: Package Unsigned IPA
+        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
         shell: bash
         run: |
           set -euo pipefail
 
-          PRODUCTS="$RUNNER_TEMP/DerivedData/Build/Products/Debug-iphonesimulator"
+          PRODUCTS="$RUNNER_TEMP/KGPQII-DerivedData/Build/Products/Release-iphoneos"
 
           APP_PATH=$(find "$PRODUCTS" \
-            -maxdepth 2 \
+            -maxdepth 1 \
             -type d \
             -name "*.app" \
             -print -quit)
 
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Built .app not found."
+            echo "::error::iOS app not found!"
             exit 1
           fi
 
           echo "Found app: $APP_PATH"
 
+          rm -rf output
+
           mkdir -p output/Payload
 
-          cp -R "$APP_PATH" output/Payload/
+          ditto "$APP_PATH" \
+            "output/Payload/$(basename "$APP_PATH")"
 
           cd output
 
           zip -qry KGP-QII-Unsigned.ipa Payload
 
-          test -f KGP-QII-Unsigned.ipa
+          test -s KGP-QII-Unsigned.ipa
 
-          echo "IPA package created successfully."
-
-          ls -lh KGP-QII-Unsigned.ipa
+          echo "Unsigned IPA created successfully."
 
       # 12. Upload IPA
       - name: Upload KGP QII IPA
         uses: actions/upload-artifact@v4
         with:
           name: KGP-QII-Unsigned-IPA
-          path: output/KGP-QII-Unsigned.ipa
+          path: source/Khmer-Game-Portal/artifacts/khmer-game-port/output/KGP-QII-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
