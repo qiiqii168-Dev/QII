@@ -1,243 +1,61 @@
-name: Build KGP QII Unsigned iOS IPA
+name: Build KGP QII Unsigned IPA
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "KGP V2.zip"
-      - "KGP_QII_BUILD_FIX_V3.zip"
-      - ".github/workflows/main.yml"
-
-permissions:
-  contents: read
-
-concurrency:
-  group: kgp-qii-ios-build
-  cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build KGP QII Unsigned IPA
-    runs-on: macos-15
-    timeout-minutes: 120
-
+  build-unsigned-ios:
+    runs-on: macos-14
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v2
         with:
-          version: 10
+          version: latest
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-
-      - name: Setup Ruby and CocoaPods
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
-          bundler-cache: false
-
-      - name: Extract Project ZIP
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f "KGP_QII_BUILD_FIX_V3.zip" ]; then
-            ZIP_FILE="KGP_QII_BUILD_FIX_V3.zip"
-          elif [ -f "KGP V2.zip" ]; then
-            ZIP_FILE="KGP V2.zip"
-          else
-            echo "ERROR: Upload KGP_QII_BUILD_FIX_V3.zip or KGP V2.zip to the repository root."
-            exit 1
-          fi
-          mkdir -p source
-          unzip -q "$ZIP_FILE" -d source
-          test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
-          test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
-          echo "Extracted $ZIP_FILE successfully."
+          node-version: 20
+          cache: 'pnpm'
 
       - name: Install Workspace Dependencies
-        working-directory: source/Khmer-Game-Portal
-        shell: bash
-        run: |
-          set -euo pipefail
-          pnpm install --no-frozen-lockfile
-
-      - name: Verify KGP QII Project
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f app.json
-          test -f package.json
-          test -d modules/gta-engine
-          test -f modules/gta-engine/GTAEngine.podspec
-          node -e '
-            const c = require("./app.json").expo;
-            if (c.name !== "KGP QII") throw new Error("Unexpected app name: " + c.name);
-            if (c.ios?.bundleIdentifier !== "com.qiiqii.khmergameport") throw new Error("Unexpected bundle identifier");
-            if (c.orientation !== "landscape") throw new Error("Landscape orientation is not configured");
-            console.log("KGP QII app configuration verified.");
-          '
-          pnpm exec expo --version
-
-      - name: Generate Clean iOS Project
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-        shell: bash
-        env:
-          EXPO_USE_PRECOMPILED_MODULES: "0"
-          RCT_USE_PREBUILT_RNCORE: "0"
-          RCT_USE_RN_DEP: "0"
-        run: |
-          set -euo pipefail
-          pnpm exec expo prebuild --platform ios --clean --no-install
-          test -f ios/Podfile
-          test -d ios
-          echo "Clean iOS project generated."
-
-      - name: Configure Source Builds and Verify Native Modules
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-        shell: bash
-        env:
-          EXPO_USE_PRECOMPILED_MODULES: "0"
-          RCT_USE_PREBUILT_RNCORE: "0"
-          RCT_USE_RN_DEP: "0"
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          path = Path("ios/Podfile.properties.json")
-          props = json.loads(path.read_text()) if path.exists() else {}
-          props["EXPO_USE_PRECOMPILED_MODULES"] = "false"
-          props["ios.buildReactNativeFromSource"] = "true"
-          path.write_text(json.dumps(props, indent=2) + "\n")
-          print("Configured Expo and React Native source builds.")
-          PY
-
-          echo "Resolving Expo native modules..."
-          pnpm exec expo-modules-autolinking resolve --platform apple > "$RUNNER_TEMP/expo-native-modules.json"
-          cat "$RUNNER_TEMP/expo-native-modules.json"
-          # Expo autolinking JSON identifies local modules by package name
-          # (@kgp/gta-engine); the Podspec name (GTAEngine) is verified after pod install.
-          if ! grep -Eqi '"@kgp/gta-engine"|"GTAEngineModule"|"GTAEngine"' "$RUNNER_TEMP/expo-native-modules.json"; then
-            echo "WARNING: GTAEngine identifiers were not present in the resolver output."
-            echo "Resolver output is saved above; continue to CocoaPods validation."
-          else
-            echo "GTAEngine package identifier found in Expo resolver output."
-          fi
-          test -f modules/gta-engine/expo-module.config.json
-          test -f modules/gta-engine/GTAEngine.podspec
-          grep -q "use_expo_modules!" ios/Podfile
-          echo "Local Expo module files verified; CocoaPods will perform final discovery check."
+        run: pnpm install
 
       - name: Install CocoaPods
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
-        shell: bash
-        env:
-          EXPO_USE_PRECOMPILED_MODULES: "0"
-          RCT_USE_PREBUILT_RNCORE: "0"
-          RCT_USE_RN_DEP: "0"
         run: |
-          set -euo pipefail
-          pod --version
-          pod install --repo-update
-          test -d Pods
-          test -f Podfile.lock
-          grep -q "ExpoModulesCore" Podfile.lock
-          grep -q "GTAEngine" Podfile.lock
-          echo "CocoaPods dependencies installed and verified."
-
-      - name: Locate Xcode Workspace and Scheme
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-        shell: bash
-        run: |
-          set -euo pipefail
-          WORKSPACE=$(find ios -maxdepth 1 -name "*.xcworkspace" -print -quit)
-          if [ -z "$WORKSPACE" ]; then
-            echo "ERROR: Xcode workspace not found."
-            exit 1
-          fi
-          echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
-          xcodebuild -list -workspace "$WORKSPACE" | tee "$RUNNER_TEMP/xcode-list.txt"
-          xcodebuild -list -json -workspace "$WORKSPACE" > "$RUNNER_TEMP/xcode-list.json"
-          SCHEME=$(python3 - <<'PY'
-          import json, os
-          d=json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "xcode-list.json")))
-          schemes=d.get("workspace",{}).get("schemes",[])
-          preferred=["KGPQII", "KHMERGAMEPORT", "KGP QII"]
-          selected=next((s for s in preferred if s in schemes), schemes[0] if schemes else None)
-          if not selected:
-              raise SystemExit("No Xcode scheme found")
-          print(selected)
-          PY
-          )
-          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
-          echo "Using workspace: $WORKSPACE"
-          echo "Using scheme: $SCHEME"
+          cd ios
+          pod install
+          cd ..
 
       - name: Build Unsigned iOS Archive
-        working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port
-        shell: bash
-        env:
-          EXPO_USE_PRECOMPILED_MODULES: "0"
-          RCT_USE_PREBUILT_RNCORE: "0"
-          RCT_USE_RN_DEP: "0"
         run: |
           set -o pipefail
-          NODE_BINARY="$(command -v node)"
-          xcodebuild \
-            -workspace "$WORKSPACE" \
-            -scheme "$SCHEME" \
+          npx expo prebuild --platform ios --clean
+          cd ios
+          xcodebuild -workspace KGPQII.xcworkspace \
+            -scheme KGPQII \
             -configuration Release \
             -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            -archivePath "$RUNNER_TEMP/KGP-QII-Unsigned.xcarchive" \
-            -derivedDataPath "$RUNNER_TEMP/KGP-DerivedData" \
-            -jobs 2 \
-            NODE_BINARY="$NODE_BINARY" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
+            -derivedDataPath build \
             CODE_SIGN_IDENTITY="" \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            archive 2>&1 | tee "$RUNNER_TEMP/xcodebuild.log"
-
-      - name: Package Unsigned IPA
-        shell: bash
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            archive -archivePath build/KGPQII.xcarchive
+        
+      - name: Package Unsigned IPA for ESign
         run: |
-          set -euo pipefail
-          APP_PATH="$RUNNER_TEMP/KGP-QII-Unsigned.xcarchive/Products/Applications"
-          APP=$(find "$APP_PATH" -maxdepth 1 -type d -name "*.app" -print -quit)
-          if [ -z "$APP" ]; then
-            echo "ERROR: No .app found inside the Xcode archive."
-            exit 1
-          fi
-          mkdir -p "$RUNNER_TEMP/ipa/Payload"
-          ditto "$APP" "$RUNNER_TEMP/ipa/Payload/$(basename "$APP")"
-          cd "$RUNNER_TEMP/ipa"
-          /usr/bin/zip -qry "$GITHUB_WORKSPACE/KGP-QII-Unsigned.ipa" Payload
-          test -s "$GITHUB_WORKSPACE/KGP-QII-Unsigned.ipa"
-          echo "Unsigned IPA created successfully."
+          cd ios
+          mkdir -p Payload
+          cp -r build/KGPQII.xcarchive/Products/Applications/*.app Payload/
+          zip -r KGPQII_Unsigned.ipa Payload
+          rm -rf Payload
+          echo "IPA path: ios/KGPQII_Unsigned.ipa"
 
-      - name: Upload KGP QII IPA
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KGP-QII-Unsigned-IPA
-          path: KGP-QII-Unsigned.ipa
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload Xcode Build Log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: KGP-QII-Xcode-Build-Log
-          path: ${{ runner.temp }}/xcodebuild.log
-          if-no-files-found: ignore
-          retention-days: 7
+          name: KGPQII-Unsigned-IPA
+          path: ios/KGPQII_Unsigned.ipa
