@@ -1,3 +1,4 @@
+
 name: Build KGP QII Unsigned iOS IPA
 
 on:
@@ -227,10 +228,6 @@ jobs:
           import re
           from pathlib import Path
 
-          # --------------------------------
-          # Expo Podfile properties
-          # --------------------------------
-
           properties = Path("ios/Podfile.properties.json")
 
           props = (
@@ -246,10 +243,6 @@ jobs:
           properties.write_text(
               json.dumps(props, indent=2) + "\n"
           )
-
-          # --------------------------------
-          # GTAEngine Podspec
-          # --------------------------------
 
           podspec = Path("modules/gta-engine/GTAEngine.podspec")
 
@@ -301,10 +294,6 @@ jobs:
 
           echo "iOS deployment target configured."
 
-          # --------------------------------
-          # Expo native module verification
-          # --------------------------------
-
           pnpm exec expo-modules-autolinking resolve \
             --platform apple \
             > "$RUNNER_TEMP/expo-native-modules.json"
@@ -312,7 +301,6 @@ jobs:
           cat "$RUNNER_TEMP/expo-native-modules.json"
 
           test -f modules/gta-engine/expo-module.config.json
-
           test -f modules/gta-engine/GTAEngine.podspec
 
           echo "Native module files verified."
@@ -514,7 +502,108 @@ jobs:
           echo "Unsigned IPA created successfully."
 
       # ==========================================
-      # 16. UPLOAD IPA
+      # 16. PACKAGE dSYM
+      # ==========================================
+
+      - name: Package KGP QII dSYM
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ARCHIVE_PATH="$RUNNER_TEMP/KGP-QII-Unsigned.xcarchive"
+          DSYM_DIR="$ARCHIVE_PATH/dSYMs"
+
+          if [ ! -d "$DSYM_DIR" ]; then
+            echo "ERROR: dSYMs directory not found."
+            exit 1
+          fi
+
+          APP=$(
+            find "$ARCHIVE_PATH/Products/Applications" \
+              -maxdepth 1 \
+              -type d \
+              -name "*.app" \
+              -print -quit
+          )
+
+          if [ -z "$APP" ]; then
+            echo "ERROR: App not found in archive."
+            exit 1
+          fi
+
+          EXECUTABLE=$(
+            /usr/libexec/PlistBuddy \
+              -c "Print :CFBundleExecutable" \
+              "$APP/Info.plist"
+          )
+
+          APP_DWARF="$APP/$EXECUTABLE"
+
+          if [ ! -f "$APP_DWARF" ]; then
+            echo "ERROR: App executable not found."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/KGP-QII-dSYM"
+
+          FOUND=0
+
+          while IFS= read -r -d '' DSYM; do
+            DWARF="$DSYM/Contents/Resources/DWARF/$EXECUTABLE"
+
+            if [ ! -f "$DWARF" ]; then
+              continue
+            fi
+
+            FOUND=1
+
+            echo "Found dSYM: $DSYM"
+
+            echo "Checking dSYM UUID..."
+            dwarfdump --uuid "$DWARF" \
+              | tee -a "$RUNNER_TEMP/KGP-QII-dSYM/dSYM-UUID.txt"
+
+            echo "Checking app UUID..."
+            dwarfdump --uuid "$APP_DWARF" \
+              | tee -a "$RUNNER_TEMP/KGP-QII-dSYM/App-UUID.txt"
+
+            ditto -c -k --sequesterRsrc --keepParent \
+              "$DSYM" \
+              "$RUNNER_TEMP/KGP-QII-dSYM/$(basename "$DSYM").zip"
+
+          done < <(
+            find "$DSYM_DIR" \
+              -maxdepth 1 \
+              -type d \
+              -name "*.dSYM" \
+              -print0
+          )
+
+          if [ "$FOUND" -ne 1 ]; then
+            echo "ERROR: Matching app dSYM not found."
+            exit 1
+          fi
+
+          test -s "$RUNNER_TEMP/KGP-QII-dSYM/dSYM-UUID.txt"
+          test -s "$RUNNER_TEMP/KGP-QII-dSYM/App-UUID.txt"
+
+          echo "dSYM package completed."
+
+      # ==========================================
+      # 17. UPLOAD dSYM
+      # ==========================================
+
+      - name: Upload KGP QII dSYM
+        uses: actions/upload-artifact@v4
+        with:
+          name: KGP-QII-dSYM
+          path: |
+            ${{ runner.temp }}/KGP-QII-dSYM/
+          if-no-files-found: error
+          retention-days: 7
+
+      # ==========================================
+      # 18. UPLOAD IPA
       # ==========================================
 
       - name: Upload KGP QII IPA
@@ -526,7 +615,7 @@ jobs:
           retention-days: 7
 
       # ==========================================
-      # 17. UPLOAD BUILD LOG
+      # 19. UPLOAD BUILD LOG
       # ==========================================
 
       - name: Upload Xcode Build Log
