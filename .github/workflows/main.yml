@@ -20,12 +20,40 @@ concurrency:
 jobs:
   build:
     name: Build KGP QII Unsigned IPA
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 120
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Verify Xcode and Swift Version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+          echo "Checking Xcode..."
+          xcodebuild -version
+
+          echo "Checking Swift..."
+          swift --version
+
+          SWIFT_VERSION=$(swift --version | awk '/Swift version/ {print $3; exit}')
+
+          python3 - "$SWIFT_VERSION" <<'PY'
+          import sys
+
+          version = tuple(map(int, sys.argv[1].split(".")[:2]))
+
+          if version < (6, 2):
+              raise SystemExit(
+                  f"ERROR: Swift 6.2 or newer required. Found {sys.argv[1]}"
+              )
+
+          print(f"Swift {sys.argv[1]} verified successfully.")
+          PY
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -47,18 +75,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           if [ -f "KGP_QII_BUILD_FIX_V3.zip" ]; then
             ZIP_FILE="KGP_QII_BUILD_FIX_V3.zip"
           elif [ -f "KGP V2.zip" ]; then
             ZIP_FILE="KGP V2.zip"
           else
-            echo "ERROR: Upload KGP_QII_BUILD_FIX_V3.zip or KGP V2.zip to the repository root."
+            echo "ERROR: Project ZIP not found."
             exit 1
           fi
+
           mkdir -p source
           unzip -q "$ZIP_FILE" -d source
+
           test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
           test -f source/Khmer-Game-Portal/artifacts/khmer-game-port/app.json
+
           echo "Extracted $ZIP_FILE successfully."
 
       - name: Install Workspace Dependencies
@@ -73,17 +105,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           test -f app.json
           test -f package.json
           test -d modules/gta-engine
           test -f modules/gta-engine/GTAEngine.podspec
+
           node -e '
             const c = require("./app.json").expo;
-            if (c.name !== "KGP QII") throw new Error("Unexpected app name: " + c.name);
-            if (c.ios?.bundleIdentifier !== "com.qiiqii.khmergameport") throw new Error("Unexpected bundle identifier");
-            if (c.orientation !== "landscape") throw new Error("Landscape orientation is not configured");
+
+            if (c.name !== "KGP QII")
+              throw new Error("Unexpected app name: " + c.name);
+
+            if (c.ios?.bundleIdentifier !== "com.qiiqii.khmergameport")
+              throw new Error("Unexpected bundle identifier");
+
+            if (c.orientation !== "landscape")
+              throw new Error("Landscape orientation is not configured");
+
             console.log("KGP QII app configuration verified.");
           '
+
           pnpm exec expo --version
 
       - name: Generate Clean iOS Project
@@ -95,9 +137,12 @@ jobs:
           RCT_USE_RN_DEP: "0"
         run: |
           set -euo pipefail
+
           pnpm exec expo prebuild --platform ios --clean --no-install
+
           test -f ios/Podfile
           test -d ios
+
           echo "Clean iOS project generated."
 
       - name: Configure Source Builds and Verify Native Modules
@@ -109,33 +154,44 @@ jobs:
           RCT_USE_RN_DEP: "0"
         run: |
           set -euo pipefail
+
           python3 - <<'PY'
           import json
           from pathlib import Path
 
           path = Path("ios/Podfile.properties.json")
+
           props = json.loads(path.read_text()) if path.exists() else {}
+
           props["EXPO_USE_PRECOMPILED_MODULES"] = "false"
           props["ios.buildReactNativeFromSource"] = "true"
+
           path.write_text(json.dumps(props, indent=2) + "\n")
+
           print("Configured Expo and React Native source builds.")
           PY
 
           echo "Resolving Expo native modules..."
-          pnpm exec expo-modules-autolinking resolve --platform apple > "$RUNNER_TEMP/expo-native-modules.json"
+
+          pnpm exec expo-modules-autolinking resolve \
+            --platform apple \
+            > "$RUNNER_TEMP/expo-native-modules.json"
+
           cat "$RUNNER_TEMP/expo-native-modules.json"
-          # Expo autolinking JSON identifies local modules by package name
-          # (@kgp/gta-engine); the Podspec name (GTAEngine) is verified after pod install.
-          if ! grep -Eqi '"@kgp/gta-engine"|"GTAEngineModule"|"GTAEngine"' "$RUNNER_TEMP/expo-native-modules.json"; then
-            echo "WARNING: GTAEngine identifiers were not present in the resolver output."
-            echo "Resolver output is saved above; continue to CocoaPods validation."
+
+          if ! grep -Eqi '"@kgp/gta-engine"|"GTAEngineModule"|"GTAEngine"' \
+            "$RUNNER_TEMP/expo-native-modules.json"; then
+            echo "WARNING: GTAEngine identifiers not found in resolver output."
           else
-            echo "GTAEngine package identifier found in Expo resolver output."
+            echo "GTAEngine package identifier found."
           fi
+
           test -f modules/gta-engine/expo-module.config.json
           test -f modules/gta-engine/GTAEngine.podspec
+
           grep -q "use_expo_modules!" ios/Podfile
-          echo "Local Expo module files verified; CocoaPods will perform final discovery check."
+
+          echo "Local Expo module files verified."
 
       - name: Install CocoaPods
         working-directory: source/Khmer-Game-Portal/artifacts/khmer-game-port/ios
@@ -146,12 +202,16 @@ jobs:
           RCT_USE_RN_DEP: "0"
         run: |
           set -euo pipefail
+
           pod --version
           pod install --repo-update
+
           test -d Pods
           test -f Podfile.lock
+
           grep -q "ExpoModulesCore" Podfile.lock
           grep -q "GTAEngine" Podfile.lock
+
           echo "CocoaPods dependencies installed and verified."
 
       - name: Locate Xcode Workspace and Scheme
@@ -159,26 +219,51 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           WORKSPACE=$(find ios -maxdepth 1 -name "*.xcworkspace" -print -quit)
+
           if [ -z "$WORKSPACE" ]; then
             echo "ERROR: Xcode workspace not found."
             exit 1
           fi
+
           echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
-          xcodebuild -list -workspace "$WORKSPACE" | tee "$RUNNER_TEMP/xcode-list.txt"
-          xcodebuild -list -json -workspace "$WORKSPACE" > "$RUNNER_TEMP/xcode-list.json"
+
+          xcodebuild -list -workspace "$WORKSPACE" \
+            | tee "$RUNNER_TEMP/xcode-list.txt"
+
+          xcodebuild -list -json -workspace "$WORKSPACE" \
+            > "$RUNNER_TEMP/xcode-list.json"
+
           SCHEME=$(python3 - <<'PY'
-          import json, os
-          d=json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "xcode-list.json")))
-          schemes=d.get("workspace",{}).get("schemes",[])
-          preferred=["KGPQII", "KHMERGAMEPORT", "KGP QII"]
-          selected=next((s for s in preferred if s in schemes), schemes[0] if schemes else None)
+          import json
+          import os
+
+          path = os.path.join(
+              os.environ["RUNNER_TEMP"],
+              "xcode-list.json"
+          )
+
+          d = json.load(open(path))
+
+          schemes = d.get("workspace", {}).get("schemes", [])
+
+          preferred = ["KGPQII", "KHMERGAMEPORT", "KGP QII"]
+
+          selected = next(
+              (s for s in preferred if s in schemes),
+              schemes[0] if schemes else None
+          )
+
           if not selected:
               raise SystemExit("No Xcode scheme found")
+
           print(selected)
           PY
           )
+
           echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+
           echo "Using workspace: $WORKSPACE"
           echo "Using scheme: $SCHEME"
 
@@ -190,8 +275,14 @@ jobs:
           RCT_USE_PREBUILT_RNCORE: "0"
           RCT_USE_RN_DEP: "0"
         run: |
-          set -o pipefail
+          set -euo pipefail
+
           NODE_BINARY="$(command -v node)"
+
+          echo "Starting KGP QII iOS Archive..."
+          echo "Using Swift:"
+          swift --version
+
           xcodebuild \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
@@ -208,21 +299,34 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             archive 2>&1 | tee "$RUNNER_TEMP/xcodebuild.log"
 
+          echo "iOS Archive completed."
+
       - name: Package Unsigned IPA
         shell: bash
         run: |
           set -euo pipefail
+
           APP_PATH="$RUNNER_TEMP/KGP-QII-Unsigned.xcarchive/Products/Applications"
+
           APP=$(find "$APP_PATH" -maxdepth 1 -type d -name "*.app" -print -quit)
+
           if [ -z "$APP" ]; then
             echo "ERROR: No .app found inside the Xcode archive."
             exit 1
           fi
+
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
+
           ditto "$APP" "$RUNNER_TEMP/ipa/Payload/$(basename "$APP")"
+
           cd "$RUNNER_TEMP/ipa"
-          /usr/bin/zip -qry "$GITHUB_WORKSPACE/KGP-QII-Unsigned.ipa" Payload
+
+          /usr/bin/zip -qry \
+            "$GITHUB_WORKSPACE/KGP-QII-Unsigned.ipa" \
+            Payload
+
           test -s "$GITHUB_WORKSPACE/KGP-QII-Unsigned.ipa"
+
           echo "Unsigned IPA created successfully."
 
       - name: Upload KGP QII IPA
