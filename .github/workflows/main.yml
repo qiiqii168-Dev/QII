@@ -1,4 +1,3 @@
-
 name: Build KGP QII Unsigned iOS IPA
 
 on:
@@ -7,6 +6,7 @@ on:
     branches:
       - main
     paths:
+      - "KGP_QII_V7_NATIVE_ENGINE_EXTRACTION_AUDIT.zip"
       - "KGP V2.zip"
       - "KGP_QII_BUILD_FIX_V3.zip"
       - ".github/workflows/main.yml"
@@ -113,6 +113,7 @@ jobs:
 
       # ==========================================
       # 6. EXTRACT PROJECT ZIP
+      # FIXED ZIP FILENAME
       # ==========================================
 
       - name: Extract Project ZIP
@@ -120,18 +121,34 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -f "KGP_QII_BUILD_FIX_V3.zip" ]; then
-            ZIP_FILE="KGP_QII_BUILD_FIX_V3.zip"
-          elif [ -f "KGP V2.zip" ]; then
-            ZIP_FILE="KGP V2.zip"
-          else
-            echo "ERROR: Project ZIP not found."
-            exit 1
+          ZIP_FILE="KGP_QII_V7_NATIVE_ENGINE_EXTRACTION_AUDIT.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "Checking backup ZIP files..."
+
+            if [ -f "KGP_QII_BUILD_FIX_V3.zip" ]; then
+              ZIP_FILE="KGP_QII_BUILD_FIX_V3.zip"
+            elif [ -f "KGP V2.zip" ]; then
+              ZIP_FILE="KGP V2.zip"
+            else
+              echo "ERROR: Project ZIP not found."
+
+              echo "Available ZIP files:"
+              find . -maxdepth 2 -iname "*.zip"
+
+              exit 1
+            fi
           fi
+
+          echo "Using ZIP: $ZIP_FILE"
+
+          unzip -t "$ZIP_FILE"
 
           mkdir -p source
 
-          unzip -q "$ZIP_FILE" -d source
+          unzip -oq "$ZIP_FILE" -d source
+
+          echo "Checking project structure..."
 
           test -f source/Khmer-Game-Portal/pnpm-workspace.yaml
 
