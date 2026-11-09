@@ -1,5 +1,4 @@
-
-name: Build SVP GAME IPA
+Name: Build SVP GAME IPA
 
 on:
   workflow_dispatch:
@@ -52,7 +51,8 @@ jobs:
         run: |
           set -e
 
-          URL="https://lumisleepsby10pm.xyz/MTc5NDI2MTg5NDo1REY0MGpEcHk1NERERWw5RFFHSXcwWUNaVF9Cb0VVX0ZhWW96Nm1vT05nOjIyNjEyL2JldGE0NS9lN2I1NDU1Y2RkZTMxZGZiYTIwNi9HVEE1V2VicG9ydC56aXA"
+          # ⚠️ ប្ដូរ USERNAME និង REPO_NAME ឱ្យត្រូវនឹង GitHub របស់អ្នក រួចយក GTA5Webport.zip ទៅ Upload ទុកក្នុង GitHub Release
+          URL="https://github.com/USERNAME/REPO_NAME/releases/download/v1.0.0/GTA5Webport.zip"
 
           mkdir -p "$RUNNER_TEMP/game"
           cd "$RUNNER_TEMP/game"
@@ -62,6 +62,7 @@ jobs:
             --retry-delay 10 \
             --connect-timeout 60 \
             --max-time 14400 \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -A "Mozilla/5.0" \
             "$URL" \
             -o GTA5Webport.zip
@@ -102,57 +103,4 @@ jobs:
           python3 Scripts/prepare.py \
             --mirror Build/Inputs/mirror
 
-      - name: Configure SVP GAME
-        run: |
-          cd "$SOURCE_ROOT/app"
-
-          /usr/libexec/PlistBuddy \
-            -c "Set :CFBundleDisplayName 'SVP GAME'" \
-            App/Info.plist
-
-      - name: Generate Xcode project
-        run: |
-          cd "$SOURCE_ROOT/app"
-          xcodegen generate
-
-      - name: Build iOS application
-        run: |
-          cd "$SOURCE_ROOT/app"
-
-          xcodebuild \
-            -project PlayGTA5Native.xcodeproj \
-            -scheme PlayGTA5Native \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath Build/Release \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_ENTITLEMENTS=App/Free.entitlements \
-            build
-
-      - name: Package unsigned IPA
-        run: |
-          set -e
-          cd "$SOURCE_ROOT/app"
-
-          APP="Build/Release/Build/Products/Release-iphoneos/PlayGTA5Native.app"
-
-          test -d "$APP" || {
-            echo "::error::Built app not found"
-            exit 1
-          }
-
-          mkdir -p "$GITHUB_WORKSPACE/output/Payload"
-
-          ditto "$APP" "$GITHUB_WORKSPACE/output/Payload/SVP GAME.app"
-
-          cd "$GITHUB_WORKSPACE/output"
-          zip -qry SVP-GAME.ipa Payload
-
-      - name: Upload SVP GAME IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: SVP-GAME-IPA
-          path: output/SVP-GAME.ipa
-          if-no-files-found: error
-          retention-days: 14
+      - name:
