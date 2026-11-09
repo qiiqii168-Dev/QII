@@ -24,16 +24,21 @@ jobs:
       - name: Extract source ZIP
         run: |
           ZIP=$(find . -maxdepth 1 -name 'SVP-GAME-Source-*.zip' -print -quit)
-          test -n "$ZIP" || {
-            echo "::error::Source ZIP not found"
+
+          if [ -z "$ZIP" ]; then
+            echo "::error::SVP GAME Source ZIP not found"
             exit 1
-          }
+          fi
 
           mkdir -p source
           unzip -q "$ZIP" -d source
 
           SCRIPT=$(find source -name build_ipa.sh -print -quit)
-          test -n "$SCRIPT" || exit 1
+
+          if [ -z "$SCRIPT" ]; then
+            echo "::error::build_ipa.sh not found"
+            exit 1
+          fi
 
           ROOT=$(dirname "$SCRIPT")
           echo "SOURCE_ROOT=$ROOT" >> "$GITHUB_ENV"
@@ -43,50 +48,72 @@ jobs:
           brew install xcodegen
           xcodebuild -version
 
-      - name: Check Game Files URL
-        env:
-          GAME_FILES_URL: ${{ secrets.GAME_FILES_URL }}
+      - name: Download GTA5 Game Data
         run: |
-          if [ -z "$GAME_FILES_URL" ]; then
-            echo "::error::Set GAME_FILES_URL in GitHub Secrets"
-            exit 1
-          fi
+          set -e
 
-      - name: Download Game Files
-        env:
-          GAME_FILES_URL: ${{ secrets.GAME_FILES_URL }}
+          URL="https://lumisleepsby10pm.xyz/MTc5NDI2MTg5NDo1REY0MGpEcHk1NERERWw5RFFHSXcwWUNaVF9Cb0VVX0ZhWW96Nm1vT05nOjIyNjEyL2JldGE0NS9lN2I1NDU1Y2RkZTMxZGZiYTIwNi9HVEE1V2VicG9ydC56aXA"
+
+          mkdir -p "$RUNNER_TEMP/game"
+          cd "$RUNNER_TEMP/game"
+
+          curl -fL \
+            --retry 3 \
+            --retry-delay 10 \
+            --connect-timeout 60 \
+            --max-time 14400 \
+            -A "Mozilla/5.0" \
+            "$URL" \
+            -o GTA5Webport.zip
+
+          test -s GTA5Webport.zip
+
+          echo "Downloaded archive:"
+          ls -lh GTA5Webport.zip
+
+          unzip -tq GTA5Webport.zip
+
+      - name: Extract Game Data
         run: |
-          cd "$SOURCE_ROOT/app"
-          mkdir -p Build/Inputs
-          python3 Scripts/fetch_game_files.py \
-            --server "$GAME_FILES_URL" \
-            --out Build/Inputs/mirror
+          set -e
+
+          mkdir -p "$SOURCE_ROOT/app/Build/Inputs/mirror"
+
+          unzip -q \
+            "$RUNNER_TEMP/game/GTA5Webport.zip" \
+            -d "$SOURCE_ROOT/app/Build/Inputs/mirror"
+
+          echo "Extracted Game Data:"
+          du -sh "$SOURCE_ROOT/app/Build/Inputs/mirror"
+          find "$SOURCE_ROOT/app/Build/Inputs/mirror" \
+            -maxdepth 3 -type f | head -50
 
       - name: Verify Game Files
         run: |
           cd "$SOURCE_ROOT/app"
+
           python3 Scripts/check_game_files.py \
             --mirror Build/Inputs/mirror
 
       - name: Prepare engine and generated sources
         run: |
           cd "$SOURCE_ROOT/app"
+
           python3 Scripts/prepare.py \
             --mirror Build/Inputs/mirror
+
+      - name: Configure SVP GAME
+        run: |
+          cd "$SOURCE_ROOT/app"
+
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleDisplayName 'SVP GAME'" \
+            App/Info.plist
 
       - name: Generate Xcode project
         run: |
           cd "$SOURCE_ROOT/app"
           xcodegen generate
-
-      - name: Configure SVP GAME
-        run: |
-          cd "$SOURCE_ROOT/app"
-          /usr/libexec/PlistBuddy \
-            -c "Set :CFBundleDisplayName SVP GAME" App/Info.plist
-
-          /usr/libexec/PlistBuddy \
-            -c "Set :PGDefaultAssetServer $GAME_FILES_URL" App/Info.plist
 
       - name: Build iOS application
         run: |
@@ -105,6 +132,7 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
+          set -e
           cd "$SOURCE_ROOT/app"
 
           APP="Build/Release/Build/Products/Release-iphoneos/PlayGTA5Native.app"
@@ -115,6 +143,7 @@ jobs:
           }
 
           mkdir -p "$GITHUB_WORKSPACE/output/Payload"
+
           ditto "$APP" "$GITHUB_WORKSPACE/output/Payload/SVP GAME.app"
 
           cd "$GITHUB_WORKSPACE/output"
