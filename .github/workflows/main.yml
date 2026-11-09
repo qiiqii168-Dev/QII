@@ -1,9 +1,11 @@
+
 name: Build SVP GAME IPA
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - 'app/**'
       - 'build_ipa.sh'
@@ -12,14 +14,14 @@ on:
 permissions:
   contents: read
 
-env:
-  APP_NAME: SVP GAME
+concurrency:
+  group: svp-game-build
+  cancel-in-progress: false
 
 jobs:
   build:
     name: Build unsigned iOS IPA
-    # The project preparation script requires Apple Silicon.
-    runs-on: macos-14-xlarge
+    runs-on: macos-15
     timeout-minutes: 360
 
     steps:
@@ -28,45 +30,54 @@ jobs:
 
       - name: Verify project files
         run: |
-          test -f build_ipa.sh || { echo 'Missing build_ipa.sh at repository root'; exit 1; }
-          test -f app/project.yml || { echo 'Missing app/project.yml; upload the contents of the source ZIP, not the ZIP itself.'; exit 1; }
-          test -f app/Scripts/prepare.py || { echo 'Missing app/Scripts/prepare.py'; exit 1; }
+          test -f build_ipa.sh || {
+            echo "ERROR: build_ipa.sh not found"
+            exit 1
+          }
+          test -f app/project.yml || {
+            echo "ERROR: app/project.yml not found"
+            exit 1
+          }
+          test -f app/Scripts/prepare.py || {
+            echo "ERROR: prepare.py not found"
+            exit 1
+          }
 
       - name: Install build tools
         run: |
-          brew update
           brew install xcodegen
           xcodebuild -version
           xcodegen --version
 
-      - name: Set SVP GAME display name
+      - name: Set SVP GAME name
         run: |
-          /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName SVP GAME' app/App/Info.plist 2>/dev/null || true
-          /usr/bin/sed -i '' 's/CFBundleDisplayName: GTA V Port/CFBundleDisplayName: "SVP GAME"/' app/project.yml
+          if [ -f app/App/Info.plist ]; then
+            /usr/libexec/PlistBuddy \
+              -c 'Set :CFBundleDisplayName SVP GAME' \
+              app/App/Info.plist || true
+          fi
 
-      - name: Check game files server setting
+      - name: Build unsigned IPA
         env:
-          GAME_FILES_URL: ${{ secrets.GAME_FILES_URL }}
+          PYTHON: /usr/bin/python3
         run: |
-          if [ -z "$GAME_FILES_URL" ]; then
-            echo 'Missing repository secret GAME_FILES_URL.'
-            echo 'Add a URL to your own compatible GTA V game-files server in Settings > Secrets and variables > Actions.'
+          chmod +x build_ipa.sh
+          ./build_ipa.sh --free
+
+          IPA=$(find . -maxdepth 3 -name '*.ipa' -print -quit)
+
+          if [ -z "$IPA" ]; then
+            echo "ERROR: IPA was not generated"
             exit 1
           fi
 
-      - name: Build IPA
-        env:
-          GAME_FILES_URL: ${{ secrets.GAME_FILES_URL }}
-          PYTHON: /usr/bin/python3
-        run: |
-          ./build_ipa.sh "$GAME_FILES_URL" --free
-          test -f GTA5Port.ipa
-          mv GTA5Port.ipa SVP-GAME.ipa
+          mkdir -p output
+          cp "$IPA" output/SVP-GAME.ipa
 
-      - name: Upload IPA artifact
+      - name: Upload SVP GAME IPA
         uses: actions/upload-artifact@v4
         with:
           name: SVP-GAME-unsigned-IPA
-          path: SVP-GAME.ipa
+          path: output/SVP-GAME.ipa
           if-no-files-found: error
           retention-days: 14
