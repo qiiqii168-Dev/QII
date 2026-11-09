@@ -18,75 +18,107 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Extract SVP GAME source
+      - name: Extract source ZIP
         run: |
-          SOURCE_ZIP=$(find . -maxdepth 1 -name 'SVP-GAME-Source-*.zip' -print -quit)
-
-          if [ -z "$SOURCE_ZIP" ]; then
-            echo "::error::SVP GAME source ZIP not found"
+          ZIP=$(find . -maxdepth 1 -name 'SVP-GAME-Source-*.zip' -print -quit)
+          test -n "$ZIP" || {
+            echo "::error::Source ZIP not found"
             exit 1
-          fi
+          }
 
           mkdir -p source
-          unzip -q "$SOURCE_ZIP" -d source
+          unzip -q "$ZIP" -d source
 
-          SCRIPT=$(find source -type f -name build_ipa.sh -print -quit)
-
-          if [ -z "$SCRIPT" ]; then
-            echo "::error::build_ipa.sh not found inside source ZIP"
-            exit 1
-          fi
+          SCRIPT=$(find source -name build_ipa.sh -print -quit)
+          test -n "$SCRIPT" || exit 1
 
           ROOT=$(dirname "$SCRIPT")
           echo "SOURCE_ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "Found source: $ROOT"
 
-      - name: Install XcodeGen
+      - name: Install tools
         run: |
           brew install xcodegen
           xcodebuild -version
-          xcodegen --version
-
-      - name: Generate Xcode project
-        run: |
-          cd "$SOURCE_ROOT/app"
-          xcodegen generate
 
       - name: Check Game Files URL
         env:
           GAME_FILES_URL: ${{ secrets.GAME_FILES_URL }}
         run: |
           if [ -z "$GAME_FILES_URL" ]; then
-            echo "::error::Missing GAME_FILES_URL secret"
+            echo "::error::Set GAME_FILES_URL in GitHub Secrets"
             exit 1
           fi
 
-      - name: Build unsigned SVP GAME IPA
+      - name: Download Game Files
         env:
           GAME_FILES_URL: ${{ secrets.GAME_FILES_URL }}
-          PYTHON: /usr/bin/python3
         run: |
-          cd "$SOURCE_ROOT"
-          chmod +x build_ipa.sh
-          ./build_ipa.sh "$GAME_FILES_URL" --free
+          cd "$SOURCE_ROOT/app"
+          mkdir -p Build/Inputs
+          python3 Scripts/fetch_game_files.py \
+            --server "$GAME_FILES_URL" \
+            --out Build/Inputs/mirror
 
-      - name: Prepare IPA
+      - name: Verify Game Files
         run: |
-          mkdir -p output
+          cd "$SOURCE_ROOT/app"
+          python3 Scripts/check_game_files.py \
+            --mirror Build/Inputs/mirror
 
-          IPA=$(find "$SOURCE_ROOT" -maxdepth 1 \
-            -name '*.ipa' -print -quit)
+      - name: Prepare engine and generated sources
+        run: |
+          cd "$SOURCE_ROOT/app"
+          python3 Scripts/prepare.py \
+            --mirror Build/Inputs/mirror
 
-          if [ -z "$IPA" ]; then
-            echo "::error::IPA was not generated"
+      - name: Generate Xcode project
+        run: |
+          cd "$SOURCE_ROOT/app"
+          xcodegen generate
+
+      - name: Configure SVP GAME
+        run: |
+          cd "$SOURCE_ROOT/app"
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleDisplayName SVP GAME" App/Info.plist
+
+          /usr/libexec/PlistBuddy \
+            -c "Set :PGDefaultAssetServer $GAME_FILES_URL" App/Info.plist
+
+      - name: Build iOS application
+        run: |
+          cd "$SOURCE_ROOT/app"
+
+          xcodebuild \
+            -project PlayGTA5Native.xcodeproj \
+            -scheme PlayGTA5Native \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath Build/Release \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS=App/Free.entitlements \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          cd "$SOURCE_ROOT/app"
+
+          APP="Build/Release/Build/Products/Release-iphoneos/PlayGTA5Native.app"
+
+          test -d "$APP" || {
+            echo "::error::Built app not found"
             exit 1
-          fi
+          }
 
-          cp "$IPA" output/SVP-GAME.ipa
-          ls -lh output/SVP-GAME.ipa
+          mkdir -p "$GITHUB_WORKSPACE/output/Payload"
+          ditto "$APP" "$GITHUB_WORKSPACE/output/Payload/SVP GAME.app"
+
+          cd "$GITHUB_WORKSPACE/output"
+          zip -qry SVP-GAME.ipa Payload
 
       - name: Upload SVP GAME IPA
         uses: actions/upload-artifact@v4
