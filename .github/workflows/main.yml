@@ -3,9 +3,6 @@ name: Build SVP GAME IPA
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
@@ -16,27 +13,38 @@ concurrency:
 
 jobs:
   build:
-    name: Build unsigned iOS IPA
+    name: Build SVP GAME
     runs-on: macos-15
     timeout-minutes: 360
 
     steps:
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check project structure
+      - name: Extract SVP GAME source
         run: |
-          echo "Checking source files..."
+          SOURCE_ZIP=$(find . -maxdepth 1 -name 'SVP-GAME-Source-*.zip' -print -quit)
 
-          if [ ! -f build_ipa.sh ]; then
-            echo "::error::build_ipa.sh not found in repository root"
-            find . -maxdepth 4 -type f | head -200
+          if [ -z "$SOURCE_ZIP" ]; then
+            echo "::error::SVP GAME source ZIP not found"
             exit 1
           fi
 
-          echo "Build script found!"
+          mkdir -p source
+          unzip -q "$SOURCE_ZIP" -d source
 
-      - name: Install dependencies
+          SCRIPT=$(find source -type f -name build_ipa.sh -print -quit)
+
+          if [ -z "$SCRIPT" ]; then
+            echo "::error::build_ipa.sh not found inside source ZIP"
+            exit 1
+          fi
+
+          ROOT=$(dirname "$SCRIPT")
+          echo "SOURCE_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "Found source: $ROOT"
+
+      - name: Install XcodeGen
         run: |
           brew install xcodegen
           xcodebuild -version
@@ -44,40 +52,46 @@ jobs:
 
       - name: Generate Xcode project
         run: |
-          if [ -f app/project.yml ]; then
-            cd app
-            xcodegen generate
-            cd ..
+          cd "$SOURCE_ROOT/app"
+          xcodegen generate
+
+      - name: Check Game Files URL
+        env:
+          GAME_FILES_URL: ${{ secrets.GAME_FILES_URL }}
+        run: |
+          if [ -z "$GAME_FILES_URL" ]; then
+            echo "::error::Missing GAME_FILES_URL secret"
+            exit 1
           fi
 
-      - name: Build SVP GAME
+      - name: Build unsigned SVP GAME IPA
+        env:
+          GAME_FILES_URL: ${{ secrets.GAME_FILES_URL }}
+          PYTHON: /usr/bin/python3
         run: |
+          cd "$SOURCE_ROOT"
           chmod +x build_ipa.sh
-          ./build_ipa.sh --help || true
-          ./build_ipa.sh
+          ./build_ipa.sh "$GAME_FILES_URL" --free
 
-      - name: Find generated IPA
+      - name: Prepare IPA
         run: |
           mkdir -p output
 
-          IPA=$(find . \
-            -type f \
-            -name "*.ipa" \
-            -not -path "./output/*" \
-            -print -quit)
+          IPA=$(find "$SOURCE_ROOT" -maxdepth 1 \
+            -name '*.ipa' -print -quit)
 
           if [ -z "$IPA" ]; then
-            echo "::error::No IPA file generated"
+            echo "::error::IPA was not generated"
             exit 1
           fi
 
           cp "$IPA" output/SVP-GAME.ipa
-          ls -lh output/
+          ls -lh output/SVP-GAME.ipa
 
       - name: Upload SVP GAME IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SVP-GAME-unsigned-IPA
+          name: SVP-GAME-IPA
           path: output/SVP-GAME.ipa
           if-no-files-found: error
           retention-days: 14
