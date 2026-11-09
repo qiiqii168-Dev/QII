@@ -6,10 +6,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'app/**'
-      - 'build_ipa.sh'
-      - '.github/workflows/main.yml'
 
 permissions:
   contents: read
@@ -28,51 +24,55 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Verify project files
+      - name: Check project structure
         run: |
-          test -f build_ipa.sh || {
-            echo "ERROR: build_ipa.sh not found"
-            exit 1
-          }
-          test -f app/project.yml || {
-            echo "ERROR: app/project.yml not found"
-            exit 1
-          }
-          test -f app/Scripts/prepare.py || {
-            echo "ERROR: prepare.py not found"
-            exit 1
-          }
+          echo "Checking source files..."
 
-      - name: Install build tools
+          if [ ! -f build_ipa.sh ]; then
+            echo "::error::build_ipa.sh not found in repository root"
+            find . -maxdepth 4 -type f | head -200
+            exit 1
+          fi
+
+          echo "Build script found!"
+
+      - name: Install dependencies
         run: |
           brew install xcodegen
           xcodebuild -version
           xcodegen --version
 
-      - name: Set SVP GAME name
+      - name: Generate Xcode project
         run: |
-          if [ -f app/App/Info.plist ]; then
-            /usr/libexec/PlistBuddy \
-              -c 'Set :CFBundleDisplayName SVP GAME' \
-              app/App/Info.plist || true
+          if [ -f app/project.yml ]; then
+            cd app
+            xcodegen generate
+            cd ..
           fi
 
-      - name: Build unsigned IPA
-        env:
-          PYTHON: /usr/bin/python3
+      - name: Build SVP GAME
         run: |
           chmod +x build_ipa.sh
-          ./build_ipa.sh --free
+          ./build_ipa.sh --help || true
+          ./build_ipa.sh
 
-          IPA=$(find . -maxdepth 3 -name '*.ipa' -print -quit)
+      - name: Find generated IPA
+        run: |
+          mkdir -p output
+
+          IPA=$(find . \
+            -type f \
+            -name "*.ipa" \
+            -not -path "./output/*" \
+            -print -quit)
 
           if [ -z "$IPA" ]; then
-            echo "ERROR: IPA was not generated"
+            echo "::error::No IPA file generated"
             exit 1
           fi
 
-          mkdir -p output
           cp "$IPA" output/SVP-GAME.ipa
+          ls -lh output/
 
       - name: Upload SVP GAME IPA
         uses: actions/upload-artifact@v4
