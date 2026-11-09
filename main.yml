@@ -1,0 +1,72 @@
+name: Build SVP GAME IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'build_ipa.sh'
+      - '.github/workflows/main.yml'
+
+permissions:
+  contents: read
+
+env:
+  APP_NAME: SVP GAME
+
+jobs:
+  build:
+    name: Build unsigned iOS IPA
+    # The project preparation script requires Apple Silicon.
+    runs-on: macos-14-xlarge
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Verify project files
+        run: |
+          test -f build_ipa.sh || { echo 'Missing build_ipa.sh at repository root'; exit 1; }
+          test -f app/project.yml || { echo 'Missing app/project.yml; upload the contents of the source ZIP, not the ZIP itself.'; exit 1; }
+          test -f app/Scripts/prepare.py || { echo 'Missing app/Scripts/prepare.py'; exit 1; }
+
+      - name: Install build tools
+        run: |
+          brew update
+          brew install xcodegen
+          xcodebuild -version
+          xcodegen --version
+
+      - name: Set SVP GAME display name
+        run: |
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName SVP GAME' app/App/Info.plist 2>/dev/null || true
+          /usr/bin/sed -i '' 's/CFBundleDisplayName: GTA V Port/CFBundleDisplayName: "SVP GAME"/' app/project.yml
+
+      - name: Check game files server setting
+        env:
+          GAME_FILES_URL: ${{ secrets.GAME_FILES_URL }}
+        run: |
+          if [ -z "$GAME_FILES_URL" ]; then
+            echo 'Missing repository secret GAME_FILES_URL.'
+            echo 'Add a URL to your own compatible GTA V game-files server in Settings > Secrets and variables > Actions.'
+            exit 1
+          fi
+
+      - name: Build IPA
+        env:
+          GAME_FILES_URL: ${{ secrets.GAME_FILES_URL }}
+          PYTHON: /usr/bin/python3
+        run: |
+          ./build_ipa.sh "$GAME_FILES_URL" --free
+          test -f GTA5Port.ipa
+          mv GTA5Port.ipa SVP-GAME.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SVP-GAME-unsigned-IPA
+          path: SVP-GAME.ipa
+          if-no-files-found: error
+          retention-days: 14
