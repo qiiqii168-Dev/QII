@@ -1,4 +1,4 @@
-Name: Build SVP GAME IPA
+name: Build SVP GAME IPA
 
 on:
   workflow_dispatch:
